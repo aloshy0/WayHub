@@ -1,0 +1,5 @@
+width=420
+height=450
+show=dmenu
+prompt=Wi-Fi
+allow_images=true

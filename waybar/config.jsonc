@@ -1,0 +1,184 @@
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 0,
+  "margin-top": 3,
+  "margin-left": 5,
+  "margin-right": 5,
+
+  "modules-left": [
+    "custom/launcher",
+    "group/workspaces",
+    "group/apps"
+  ],
+
+  "modules-center": [
+    "clock"
+  ],
+
+  "modules-right": [
+    "hyprland/window",
+    "group/system"
+  ],
+
+  "custom/launcher": {
+    "format": "",
+    "on-click": "radiqctl toggle",
+    "tooltip": false
+  },
+
+  "group/workspaces": {
+    "orientation": "horizontal",
+    "modules": [
+      "hyprland/workspaces"
+    ]
+  },
+
+  "hyprland/workspaces": {
+    "disable-scroll": true,
+    "all-outputs": true,
+    "format": "{icon}",
+    "format-icons": {
+      "active": "",
+      "default": "",
+      "persistent": ""
+    },
+    "persistent-workspaces": {
+      "*": 5
+    }
+  },
+
+  "group/apps": {
+    "orientation": "horizontal",
+    "modules": [
+      "custom/terminal",
+      "custom/browser",
+      "custom/files"
+    ]
+  },
+
+  "custom/terminal": {
+    "format": "",
+    "on-click": "kitty",
+    "tooltip": "Terminal"
+  },
+
+  "custom/browser": {
+    "format": "󰖟",
+    "on-click": "google-chrome-stable",
+    "tooltip": "Chrome"
+  },
+
+  "custom/files": {
+    "format": "",
+    "on-click": "thunar",
+    "tooltip": "Files"
+  },
+
+  "clock": {
+    "format": "{:%H:%M}",
+    "tooltip-format": "{:%A, %d %B %Y}"
+  },
+
+  "hyprland/window": {
+    "format": "{class}  {title}",
+    "max-length": 45,
+    "separate-outputs": true
+  },
+
+  "group/system": {
+    "orientation": "horizontal",
+    "modules": [
+      "backlight",
+      "network",
+      "bluetooth",
+      "pulseaudio",
+      "battery",
+      "cpu",
+      "memory"
+    ]
+  },
+
+  "backlight": {
+    "format": "{percent}% {icon}",
+    "format-icons": [
+      "󰃞",
+      "󰃟",
+      "󰃠"
+    ],
+    "on-scroll-up": "brightnessctl -e4 -n2 set 5%+",
+    "on-scroll-down": "brightnessctl -e4 -n2 set 5%-",
+    "tooltip-format": "Brightness: {percent}%"
+  },
+  
+  "network": {
+    "format-wifi": "",
+    "format-ethernet": "󰈀",
+    "format-disconnected": "󰤮",
+    "tooltip-format-wifi": "Wi-Fi: {essid}\nSignal: {signalStrength}%\nClick: choose network\nRight-click: Wi-Fi on/off",
+    "tooltip-format-ethernet": "Ethernet: {ifname}",
+    "tooltip-format-disconnected": "Wi-Fi disconnected\nClick: choose network\nRight-click: Wi-Fi on/off",
+
+    "on-click": "~/.config/waybar/wifi-menu.sh",
+    "on-click-right": "nmcli radio wifi off && notify-send 'Wi-Fi' 'Wi-Fi disabled' || nmcli radio wifi on",
+
+    "interval": 3
+   },
+
+  "bluetooth": {
+    "format": "",
+    "format-disabled": "",
+    "format-off": "",
+    "format-connected": "",
+    "tooltip-format": "{num_connections} connected",
+    "on-click": "~/.config/waybar/bluetooth-menu.sh",
+    "on-click-right": "bluetoothctl power off",
+    "on-click-middle": "bluetoothctl power on"
+  },
+
+  "pulseaudio": {
+    "format": "{icon}",
+    "format-muted": "",
+    "format-icons": {
+      "default": [
+        "",
+        "",
+        ""
+      ],
+      "headphone": "",
+      "headset": ""
+    },
+    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "tooltip-format": "{volume}%"
+  },
+
+  "battery": {
+    "format": "{capacity}% {icon}",
+    "format-charging": "{capacity}% 󰂄",
+    "format-full": "󰁹",
+    "format-icons": [
+      "󰁺",
+      "󰁻",
+      "󰁼",
+      "󰁽",
+      "󰁾",
+      "󰁿",
+      "󰂀",
+      "󰂁",
+      "󰂂",
+      "󰁹"
+    ],
+    "tooltip-format": "{capacity}% {power:.1f}W"
+  },
+
+  "cpu": {
+    "format": "󰍛 {usage}%",
+    "interval": 5
+  },
+
+  "memory": {
+    "format": " {percentage}%",
+    "interval": 5
+  }
+}

@@ -1,0 +1,247 @@
+* {
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 12px;
+}
+
+window#waybar {
+    background: transparent;
+    color: #cdd6f4;
+}
+
+/* =========================
+   COMMON PILL STYLE
+   ========================= */
+
+#custom-launcher,
+#group-workspaces,
+#group-apps,
+#group-system,
+#clock,
+#window,
+#network,
+#bluetooth,
+#pulseaudio,
+#battery,
+#cpu,
+#memory {
+    background: rgba(10, 10, 14, 0.92);
+    border: 2px solid #50505a;
+    border-radius: 14px;
+}
+
+/* =========================
+   RIGHT SIDE SYSTEM PILLS
+   ========================= */
+
+#network,
+#bluetooth,
+#pulseaudio,
+#battery,
+#cpu,
+#memory {
+    min-width: 38px;
+    min-height: 38px;
+
+    padding: 0;
+    margin: 1px 2px;
+
+}
+
+/* Keep the icons centered */
+#network,
+#bluetooth,
+#pulseaudio,
+#battery,
+#cpu,
+#memory {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* =========================
+   COLORS
+   ========================= */
+
+#network {
+    color: #cdd6f4;
+}
+
+#bluetooth {
+    color: #5aa9ff;
+}
+
+#pulseaudio {
+    color: #ff4fa3;
+}
+
+#battery {
+    color: #ff4fa3;
+}
+
+#cpu {
+    color: #b56cff;
+}
+
+#memory {
+    color: #20a8ff;
+}
+
+/* =========================
+   SYSTEM GROUP
+   ========================= */
+
+#group-system {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+}
+
+/* =========================
+   LAUNCHER
+   ========================= */
+
+#custom-launcher {
+    background: rgba(10, 10, 14, 0.92);
+    color: #d16cff;
+    min-width: 32px;
+    min-height: 38px;
+    padding: 0;
+    margin: 1px 2px;
+    border: 2px solid #50505a;
+    border-radius: 14px;
+}
+
+/* =========================
+   WORKSPACES
+   ========================= */
+
+#group-workspaces {
+    padding: 1px 4px;
+    margin: 1px 2px;
+}
+
+#workspaces button {
+    color: #565866;
+    background: transparent;
+    padding: 0 5px;
+    margin: 0;
+}
+
+#workspaces button.active {
+    color: #25a7ff;
+}
+
+#workspaces button.urgent {
+    color: #ff4f9a;
+}
+
+/* =========================
+   APPLICATION SHORTCUTS
+   ========================= */
+
+#group-apps {
+    padding: 1px 4px;
+    margin: 1px 2px;
+}
+
+#custom-terminal,
+#custom-browser,
+#custom-files {
+    padding: 0 6px;
+    color: #21a7ff;
+}
+
+#custom-browser {
+    color: #21a7ff;
+}
+
+#custom-files {
+    color: #ff4fa3;
+}
+
+/* =========================
+   CLOCK
+   ========================= */
+
+#clock {
+    color: #eeeeee;
+    padding-left: 10px;
+    padding-right: 10px;
+    margin: 1px 2px;
+}
+
+/* =========================
+   WINDOW TITLE
+   ========================= */
+
+#window {
+    color: #d0d0d0;
+    padding-left: 9px;
+    padding-right: 9px;
+    margin: 1px 2px;
+}
+
+/* =========================
+   BACKLIGHT
+   ========================= */
+
+#backlight {
+    color: #ffd166;
+    padding-left: 7px;
+    padding-right: 7px;
+}
+
+/* =========================
+   HOVER & STATE EFFECTS
+   ========================= */
+
+#network:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #25a7ff;
+}
+
+#network.disconnected {
+    color: #ff4f9a;
+    border-color: #ff4f9a;
+}
+
+#bluetooth:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #5aa9ff;
+}
+
+#bluetooth.disabled,
+#bluetooth.off {
+    color: #555566;
+    border-color: #3b3b46;
+}
+
+#pulseaudio:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #ff4fa3;
+}
+
+#battery:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #ff4fa3;
+}
+
+#cpu:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #b56cff;
+}
+
+#memory:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #20a8ff;
+}
+
+#custom-launcher:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #d16cff;
+}
+
