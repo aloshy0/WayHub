@@ -192,4 +192,7 @@ Waybar and Wofi are third-party projects and are subject to their own upstream l
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/6204a553-ff3f-4c47-b261-44ed27b6bece" />
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/4978039b-1449-4684-a32f-e273d5cd70fa" />
+
+
 
