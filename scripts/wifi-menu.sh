@@ -129,8 +129,8 @@ fi
 # Wi-Fi is enabled. Gather current connections and scan results.
 saved_list=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" {print $1}')
 
-# Fetch scan results in multiline mode to parse SSID safely
-wifi_list_output=$(nmcli -m multiline -f ACTIVE,SSID,SIGNAL,SECURITY device wifi list 2>/dev/null)
+# Fetch scan results in multiline mode to parse SSID safely (no rescan on start to prevent menu delay)
+wifi_list_output=$(nmcli -m multiline -f ACTIVE,SSID,SIGNAL,SECURITY device wifi list --rescan no 2>/dev/null)
 
 declare -A ssid_map
 declare -A ssid_signal
@@ -216,6 +216,7 @@ done <<< "$sorted_ssids"
 
 # Build main menu contents
 menu_content="󰂲  Disable Wi-Fi"$'\n'
+menu_content+="󰂰  Scan for Networks"$'\n'
 
 if [ -n "$connected_line" ]; then
     menu_content+="CONNECTED"$'\n'
@@ -239,6 +240,10 @@ if [ "$chosen" = "󰂲  Disable Wi-Fi" ]; then
     nmcli radio wifi off
     notify-send "Wi-Fi" "Wi-Fi disabled" -i network-wireless
     exit 0
+elif [ "$chosen" = "󰂰  Scan for Networks" ]; then
+    notify-send "Wi-Fi" "Scanning for networks..." -i network-wireless
+    nmcli device wifi list --rescan yes >/dev/null 2>&1 || true
+    exec "$0"
 elif [ "$chosen" = "󰌆  SAVED NETWORKS" ]; then
     show_saved_networks
     exit 0
