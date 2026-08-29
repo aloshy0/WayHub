@@ -143,3 +143,10 @@ sudo systemctl enable --now NetworkManager
 
 This project is licensed under the [MIT License](file:///home/michael/Projects/waybar/LICENSE).
 Waybar and Wofi are third-party projects and are subject to their own upstream licensing.
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c31f263a-8f6f-40a2-9817-4a8e73d953af" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/02da32a6-6989-4d21-9e51-274cef8a4bf1" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/30f3e6b8-4b2f-405c-b8fd-8646242d5b75" />
+
