@@ -24,7 +24,7 @@ run_btctl() {
 
 # Scan for nearby devices
 scan_devices() {
-    notify-send "Bluetooth" "Scanning for nearby devices..." -i bluetooth
+    notify-send "Bluetooth" "Refreshing Bluetooth device list..." -i bluetooth
 
     # Start scan in background
     bluetoothctl scan on >/dev/null 2>&1 &
@@ -40,7 +40,7 @@ scan_devices() {
     kill "$scan_pid" 2>/dev/null || true
     bluetoothctl scan off >/dev/null 2>&1 || true
 
-    notify-send "Bluetooth" "Scan complete." -i bluetooth
+    notify-send "Bluetooth" "Device list refreshed." -i bluetooth
 }
 
 # Fetch controller state
@@ -92,7 +92,7 @@ while IFS= read -r dev; do
     trusted=$(echo "$info" | grep -q "Trusted: yes" && echo yes || echo no)
 
     if [ "$connected" = "yes" ]; then
-        display_line="●  $name  [Connected]"
+        display_line="●  $name   Connected"
         connected_lines+="$display_line"$'\n'
         mac_map["$display_line"]="$mac"
         dev_state["$mac"]="connected|paired|$trusted|$name"
@@ -118,10 +118,10 @@ else
     menu_content+="󰂰  Enable Discoverability (Currently: Off)"$'\n'
 fi
 
-menu_content+="󰂰  Scan for Devices"$'\n'
+menu_content+="󰂰  Refresh Devices"$'\n'
 
 if [ -n "$connected_lines" ]; then
-    menu_content+="CONNECTED DEVICES"$'\n'
+    menu_content+="CONNECTED"$'\n'
     menu_content+="$connected_lines"$'\n'
 fi
 
@@ -156,12 +156,12 @@ case "$chosen" in
         notify-send "Bluetooth" "Discoverability enabled" -i bluetooth
         exit 0
         ;;
-    "󰂰  Scan for Devices")
+    "󰂰  Refresh Devices")
         scan_devices
         # Re-run menu script to show newly scanned devices
         exec "$0"
         ;;
-    "CONNECTED DEVICES"|"PAIRED DEVICES"|"AVAILABLE DEVICES")
+    "CONNECTED"|"PAIRED DEVICES"|"AVAILABLE DEVICES")
         exit 0
         ;;
 esac
