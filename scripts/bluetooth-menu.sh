@@ -57,12 +57,22 @@ if [ "$power_status" = "no" ]; then
     if [ "$chosen" = "󰂯  Enable Bluetooth" ]; then
         bluetoothctl power on >/dev/null 2>&1
         notify-send "Bluetooth" "Bluetooth enabled" -i bluetooth
+        sleep 1
+        exec "$0"
     fi
     exit 0
 fi
 
 # Bluetooth is powered on
 discoverable_status=$(echo "$controller_info" | grep "Discoverable:" | awk '{print $2}')
+
+# Start a quick scan to discover nearby devices automatically
+notify-send "Bluetooth" "Scanning for nearby devices..." -i bluetooth -t 1500
+bluetoothctl scan on >/dev/null 2>&1 &
+scan_pid=$!
+sleep 1.5
+kill "$scan_pid" 2>/dev/null || true
+bluetoothctl scan off >/dev/null 2>&1 || true
 
 # Load devices
 device_list=$(bluetoothctl devices 2>/dev/null)
@@ -125,8 +135,8 @@ if [ -n "$connected_lines" ]; then
     menu_content+="$connected_lines"$'\n'
 fi
 
-if [ -n "$paired_lines" ]; then
-    menu_content+="PAIRED DEVICES"$'\n'
+if [ "$paired_lines" != "" ]; then
+    menu_content+="PREVIOUSLY CONNECTED DEVICES"$'\n'
     menu_content+="$paired_lines"$'\n'
 fi
 
@@ -161,7 +171,7 @@ case "$chosen" in
         # Re-run menu script to show newly scanned devices
         exec "$0"
         ;;
-    "CONNECTED"|"PAIRED DEVICES"|"AVAILABLE DEVICES")
+    "CONNECTED"|"PREVIOUSLY CONNECTED DEVICES"|"AVAILABLE DEVICES")
         exit 0
         ;;
 esac
@@ -218,14 +228,34 @@ case "$action_chosen" in
         ;;
     "󰌆  Pair")
         notify-send "Bluetooth" "Pairing with $name..." -i bluetooth
-        # Pair using a dedicated agent session
-        if printf "%b\n" "agent KeyboardDisplay" "default-agent" "pair $mac" "exit" | bluetoothctl | grep -q "Pairing successful"; then
+        
+        # Start our custom auto-accept agent in the background
+        script_dir=$(dirname "$0")
+        python3 "$script_dir/bt-agent.py" >/dev/null 2>&1 &
+        agent_pid=$!
+        sleep 0.5
+
+        # Trust first to facilitate the connection
+        bluetoothctl trust "$mac" >/dev/null 2>&1
+
+        # Attempt pairing (which will query the running agent for confirmations)
+        if bluetoothctl pair "$mac" >/dev/null 2>&1; then
             notify-send "Bluetooth" "$name paired successfully" -i bluetooth
-            bluetoothctl trust "$mac" >/dev/null 2>&1
             bluetoothctl connect "$mac" >/dev/null 2>&1 || true
         else
-            notify-send "Bluetooth" "Pairing failed for $name" -i bluetooth
+            # Try connecting directly in case it succeeded but pair command exited with non-zero
+            if bluetoothctl connect "$mac" >/dev/null 2>&1; then
+                notify-send "Bluetooth" "$name connected successfully" -i bluetooth
+            else
+                notify-send "Bluetooth" "Pairing failed for $name" -i bluetooth
+                # Untrust if pairing failed
+                bluetoothctl untrust "$mac" >/dev/null 2>&1 || true
+            fi
         fi
+
+        # Clean up the background agent
+        kill "$agent_pid" 2>/dev/null || true
+        wait "$agent_pid" 2>/dev/null || true
         ;;
     "󰌆  Trust Device")
         if bluetoothctl trust "$mac" >/dev/null 2>&1; then

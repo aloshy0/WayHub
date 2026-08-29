@@ -97,8 +97,10 @@ safe_install "waybar/style.css" "$HOME/.config/waybar/style.css"
 echo -e "${YELLOW}Installing helper scripts...${NC}"
 safe_install "scripts/wifi-menu.sh" "$HOME/.config/waybar/wifi-menu.sh"
 safe_install "scripts/bluetooth-menu.sh" "$HOME/.config/waybar/bluetooth-menu.sh"
+safe_install "scripts/bt-agent.py" "$HOME/.config/waybar/bt-agent.py"
 chmod +x "$HOME/.config/waybar/wifi-menu.sh"
 chmod +x "$HOME/.config/waybar/bluetooth-menu.sh"
+chmod +x "$HOME/.config/waybar/bt-agent.py"
 
 # 4. Install Wofi files
 echo -e "${YELLOW}Installing Wofi files...${NC}"
