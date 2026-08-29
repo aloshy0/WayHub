@@ -20,6 +20,7 @@ files_to_remove=(
     "$HOME/.config/waybar/style.css"
     "$HOME/.config/waybar/wifi-menu.sh"
     "$HOME/.config/waybar/bluetooth-menu.sh"
+    "$HOME/.config/waybar/bt-agent.py"
     "$HOME/.config/wofi/config"
     "$HOME/.config/wofi/style.css"
 )

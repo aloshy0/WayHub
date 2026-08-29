@@ -30,25 +30,58 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 
 ## Requirements
 
-The installer checks for and handles the following dependencies on Arch Linux:
+The installer automatically checks for and handles the following dependencies on Arch Linux:
 - `waybar` (Status bar)
 - `wofi` (Menu launcher)
 - `networkmanager` (Provides `nmcli` for Wi-Fi management)
-- `bluez` & `bluez-utils` (Provides `bluetoothd` and `bluetoothctl`)
+- `bluez` & `bluez-utils` (Provides `bluetoothd` and `bluetoothctl` for Bluetooth control)
+- `python` (Python 3 interpreter)
+- `python-dbus` (Python D-Bus bindings for the automated pairing agent)
+- `python-gobject` (PyGObject GLib bindings for the automated pairing agent)
 - `bash`
 - `libnotify` (Provides `notify-send` for desktop notifications)
-- A Nerd Font (e.g., **JetBrainsMono Nerd Font** for glyph support)
+- A Nerd Font (e.g., **JetBrainsMono Nerd Font** for icon/glyph support)
 
 ---
 
 ## Installation
 
+To download, install, and apply the customization suite, run the following commands in your terminal:
+
 ```bash
-git clone https://github.com/aloshy0/hyprland-custom-waybar.git
-cd hyprland-custom-waybar
+# Clone the repository
+git clone https://github.com/aloshy0/WayHub.git
+
+# Navigate to the cloned directory
+cd WayHub
+
+# Mark the installer as executable
 chmod +x install.sh
+
+# Run the installer
 ./install.sh
 ```
+
+### What the installer does:
+1. **Verifies Dependencies**: Scans your system for all required tools and libraries (such as `waybar`, `wofi`, `networkmanager`, `bluez`, `python-dbus`, etc.), and asks for permission to install missing ones using `pacman`.
+2. **Backs Up Existing Configurations**: If you already have configurations or scripts in `~/.config/waybar/` or `~/.config/wofi/`, the installer automatically creates safe, timestamped backups (e.g., `config.jsonc.YYYYMMDD_HHMMSS.bak`) before proceeding.
+3. **Installs Configurations & Scripts**: Copies the custom config files and scripts (including the Wi-Fi/Bluetooth menu scripts and the background Bluetooth agent helper) to your config directory and marks the scripts as executable.
+4. **Reloads Waybar**: Sends a `SIGUSR2` signal to active instances of Waybar, updating your status bar styling immediately without requiring a system reboot.
+
+---
+
+## Uninstallation
+
+If you ever wish to remove the configurations and restore/cleanup your setup, run the included rollback utility:
+
+```bash
+# Navigate to the repository directory
+cd WayHub
+
+# Run the uninstaller
+./uninstall.sh
+```
+This utility removes the installed configurations and helper scripts, while leaving your original backup files (`*.bak`) intact so you can easily restore them if needed.
 
 ---
 
@@ -74,7 +107,7 @@ chmod +x install.sh
 ## File Structure
 
 ```
-hyprland-custom-waybar/
+WayHub/
 │
 ├── README.md             # This documentation file
 ├── LICENSE               # MIT License details
@@ -122,11 +155,17 @@ killall -USR2 waybar
 ```
 
 ### Bluetooth agent issues
-If pairing fails, verify that the Bluetooth agent is running or try running:
-```bash
-systemctl status bluetooth
-```
-Make sure your user has permissions to access the D-Bus system.
+Our custom automated pairing agent (`bt-agent.py`) runs dynamically in the background during pairing attempts to automatically accept PIN/passcode confirmations. If pairing fails:
+- Check that the Bluetooth service is active:
+  ```bash
+  systemctl status bluetooth
+  ```
+- Ensure you have `python-dbus` and `python-gobject` installed so the helper script can run.
+- Make sure Bluetooth is not blocked by rfkill:
+  ```bash
+  rfkill list
+  rfkill unblock bluetooth
+  ```
 
 ### Icons not displaying correctly
 Verify that you have installed a Nerd Font. On Arch Linux:

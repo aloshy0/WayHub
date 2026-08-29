@@ -16,8 +16,8 @@ echo -e "   Waybar & Wofi Configurations Installer"
 echo -e "==========================================${NC}\n"
 
 # 1. Dependency checks
-dependencies=("waybar" "wofi" "nmcli" "bluetoothctl")
-pkg_names=("waybar" "wofi" "networkmanager" "bluez-utils")
+dependencies=("waybar" "wofi" "nmcli" "bluetoothctl" "python3")
+pkg_names=("waybar" "wofi" "networkmanager" "bluez-utils" "python")
 missing_deps=()
 missing_pkgs=()
 
@@ -29,6 +29,18 @@ for i in "${!dependencies[@]}"; do
         missing_pkgs+=("$pkg")
     fi
 done
+
+# Check for Python DBus and GObject dependencies if python3 is available
+if command -v python3 >/dev/null 2>&1; then
+    if ! python3 -c "import dbus" >/dev/null 2>&1; then
+        missing_deps+=("python-dbus")
+        missing_pkgs+=("python-dbus")
+    fi
+    if ! python3 -c "import gi" >/dev/null 2>&1; then
+        missing_deps+=("python-gobject")
+        missing_pkgs+=("python-gobject")
+    fi
+fi
 
 if [ ${#missing_deps[@]} -ne 0 ]; then
     echo -e "${YELLOW}Detected missing dependencies:${NC}"
