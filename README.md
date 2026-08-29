@@ -4,6 +4,9 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 
 ![GitHub License](https://img.shields.io/badge/license-MIT-blue.svg)
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/dcf66aea-f802-498a-860e-f58b4151be1d" />
+
+
 ## Features
 
 ### 󰤨 Wi-Fi Menu (`wifi-menu.sh`)
