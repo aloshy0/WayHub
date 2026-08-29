@@ -216,7 +216,7 @@ done <<< "$sorted_ssids"
 
 # Build main menu contents
 menu_content="󰂲  Disable Wi-Fi"$'\n'
-menu_content+="󰂰  Scan for Networks"$'\n'
+menu_content+="󰂰  Refresh Networks"$'\n'
 
 if [ -n "$connected_line" ]; then
     menu_content+="CONNECTED"$'\n'
@@ -240,8 +240,8 @@ if [ "$chosen" = "󰂲  Disable Wi-Fi" ]; then
     nmcli radio wifi off
     notify-send "Wi-Fi" "Wi-Fi disabled" -i network-wireless
     exit 0
-elif [ "$chosen" = "󰂰  Scan for Networks" ]; then
-    notify-send "Wi-Fi" "Scanning for networks..." -i network-wireless
+elif [ "$chosen" = "󰂰  Refresh Networks" ]; then
+    notify-send "Wi-Fi" "Refreshing network list..." -i network-wireless
     nmcli device wifi list --rescan yes >/dev/null 2>&1 || true
     exec "$0"
 elif [ "$chosen" = "󰌆  SAVED NETWORKS" ]; then
