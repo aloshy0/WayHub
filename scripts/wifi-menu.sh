@@ -197,20 +197,9 @@ while IFS= read -r ssid; do
         connected_line="$icon  $ssid   Connected"
         ssid_map["$connected_line"]="$ssid"
     else
-        # Filter out saved connections from available list to prevent clutter
-        is_saved=false
-        while IFS= read -r saved_name; do
-            if [ "$saved_name" = "$ssid" ]; then
-                is_saved=true
-                break
-            fi
-        done <<< "$saved_list"
-
-        if [ "$is_saved" = "false" ]; then
-            display_line="$icon  $ssid  [$signal%]"
-            available_lines+="$display_line"$'\n'
-            ssid_map["$display_line"]="$ssid"
-        fi
+        display_line="$icon  $ssid  [$signal%]"
+        available_lines+="$display_line"$'\n'
+        ssid_map["$display_line"]="$ssid"
     fi
 done <<< "$sorted_ssids"
 
