@@ -3,3 +3,4 @@ height=450
 show=dmenu
 prompt=Wi-Fi
 allow_images=true
+single_click=true
