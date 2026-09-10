@@ -209,6 +209,11 @@ window#waybar {
     border-color: #ff4f9a;
 }
 
+#network.disabled {
+    color: #555566;
+    border-color: #3b3b46;
+}
+
 #bluetooth:hover {
     background: rgba(30, 30, 40, 0.95);
     border-color: #5aa9ff;

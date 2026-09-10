@@ -10,7 +10,7 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 ## Features
 
 ### 󰤨 Wi-Fi Menu (`wifi-menu.sh`)
-- **Interactive State**: Toggle Wi-Fi power (Enable/Disable) directly from the menu.
+- **Interactive State**: Toggle Wi-Fi power (Turn On/Off) directly from the menu.
 - **Connection Isolation**: Shows currently connected Wi-Fi network at the top.
 - **Polished Sorting**: Lists available networks sorted by signal strength.
 - **De-cluttered Interface**: Saved networks are grouped into a sub-menu to keep the main list clean.

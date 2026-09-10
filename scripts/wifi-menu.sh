@@ -113,11 +113,11 @@ show_saved_networks() {
 wifi_state=$(nmcli radio wifi)
 
 if [ "$wifi_state" = "disabled" ]; then
-    chosen=$(printf "󰤮  Enable Wi-Fi\n󰌆  SAVED NETWORKS\n" | wofi --dmenu --prompt "Wi-Fi (Disabled)" --width 420 --height 180)
+    chosen=$(printf "󰤨  Turn On Wi-Fi\n󰌆  SAVED NETWORKS\n" | wofi --dmenu --prompt "Wi-Fi (Off)" --width 420 --height 180)
     case "$chosen" in
-        "󰤮  Enable Wi-Fi")
+        "󰤨  Turn On Wi-Fi")
             nmcli radio wifi on
-            notify-send "Wi-Fi" "Wi-Fi enabled" -i network-wireless
+            notify-send "Wi-Fi" "Wi-Fi turned on" -i network-wireless
             ;;
         "󰌆  SAVED NETWORKS")
             show_saved_networks
@@ -204,7 +204,7 @@ while IFS= read -r ssid; do
 done <<< "$sorted_ssids"
 
 # Build main menu contents
-menu_content="󰂲  Disable Wi-Fi"$'\n'
+menu_content="󰤮  Turn Off Wi-Fi"$'\n'
 menu_content+="󰂰  Refresh Networks"$'\n'
 
 if [ -n "$connected_line" ]; then
@@ -225,9 +225,9 @@ chosen=$(wofi --dmenu --prompt "Wi-Fi" --width 420 --height 500 <<< "$menu_conte
 [ -z "$chosen" ] && exit 0
 
 # Handle static actions
-if [ "$chosen" = "󰂲  Disable Wi-Fi" ]; then
+if [ "$chosen" = "󰤮  Turn Off Wi-Fi" ]; then
     nmcli radio wifi off
-    notify-send "Wi-Fi" "Wi-Fi disabled" -i network-wireless
+    notify-send "Wi-Fi" "Wi-Fi turned off" -i network-wireless
     exit 0
 elif [ "$chosen" = "󰂰  Refresh Networks" ]; then
     notify-send "Wi-Fi" "Refreshing network list..." -i network-wireless

@@ -41,11 +41,7 @@
     "format": "{icon}",
     "format-icons": {
       "active": "",
-      "default": "",
-      "persistent": ""
-    },
-    "persistent-workspaces": {
-      "*": 5
+      "default": ""
     }
   },
 
@@ -77,7 +73,8 @@
   },
 
   "clock": {
-    "format": "{:%H:%M}",
+    "timezone": "Asia/Kolkata",
+    "format": "{:%I:%M %p}",
     "tooltip-format": "{:%A, %d %B %Y}"
   },
 
@@ -116,12 +113,14 @@
     "format-wifi": "",
     "format-ethernet": "󰈀",
     "format-disconnected": "󰤮",
+    "format-disabled": "󰤮",
     "tooltip-format-wifi": "Wi-Fi: {essid}\nSignal: {signalStrength}%\nClick: choose network\nRight-click: Wi-Fi on/off",
     "tooltip-format-ethernet": "Ethernet: {ifname}",
     "tooltip-format-disconnected": "Wi-Fi disconnected\nClick: choose network\nRight-click: Wi-Fi on/off",
+    "tooltip-format-disabled": "Wi-Fi turned off\nClick: choose network\nRight-click: Wi-Fi on/off",
 
     "on-click": "~/.config/waybar/wifi-menu.sh",
-    "on-click-right": "nmcli radio wifi off && notify-send 'Wi-Fi' 'Wi-Fi disabled' || nmcli radio wifi on",
+    "on-click-right": "if [ $(nmcli radio wifi) = 'enabled' ]; then nmcli radio wifi off && notify-send 'Wi-Fi' 'Wi-Fi turned off'; else nmcli radio wifi on && notify-send 'Wi-Fi' 'Wi-Fi turned on'; fi",
 
     "interval": 3
    },
