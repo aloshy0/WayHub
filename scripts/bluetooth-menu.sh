@@ -17,64 +17,150 @@ if ! systemctl is-active --quiet bluetooth; then
     exit 1
 fi
 
-# Helper function to run commands in a single bluetoothctl session
-run_btctl() {
-    printf "%b\n" "$@" | bluetoothctl >/dev/null 2>&1
+# Notification helper using Dunst stack tagging for clean replacement
+bt_notify() {
+    local text="$1"
+    local urgency="${2:-normal}" # normal, low, critical
+    local timeout="${3:-3500}"
+    local icon="bluetooth"
+    [ "$urgency" = "critical" ] && icon="dialog-error"
+    notify-send -a "Bluetooth" -u "$urgency" -i "$icon" -t "$timeout" -h string:x-dunst-stack-tag:bluetooth "Bluetooth" "$text"
 }
 
-# Scan for nearby devices
+# Helper function to scan for nearby devices reliably
 scan_devices() {
-    notify-send "Bluetooth" "Refreshing Bluetooth device list..." -i bluetooth
+    bt_notify "Scanning for nearby devices (8s)..." normal 3000
+    bluetoothctl pairable on </dev/null >/dev/null 2>&1 || true
+    bluetoothctl discoverable on </dev/null >/dev/null 2>&1 || true
+    bluetoothctl --timeout 8 scan on </dev/null >/dev/null 2>&1 || true
+    bt_notify "Scan complete. Device list refreshed." normal 2500
+}
 
-    # Start scan in background
-    bluetoothctl scan on >/dev/null 2>&1 &
-    local scan_pid=$!
+# Connect helper verifying actual connection state
+bt_connect() {
+    local mac="$1"
+    local name="$2"
+    bt_notify "Connecting to $name..." normal 6000
 
-    # Clean up scan on script termination/exit
-    trap 'kill "$scan_pid" 2>/dev/null; bluetoothctl scan off >/dev/null 2>&1' EXIT INT TERM
+    local out
+    out=$(bluetoothctl --timeout 10 connect "$mac" </dev/null 2>&1)
+    
+    local info
+    info=$(bluetoothctl info "$mac" 2>/dev/null)
+    if echo "$info" | grep -q "Connected: yes"; then
+        bt_notify "Connected to $name" normal 3000
+    else
+        local reason
+        reason=$(echo "$out" | grep -iE "failed|error|not available|refused|timeout|abort" | head -n 1)
+        [ -z "$reason" ] && reason="Connection failed (device unreachable or off)"
+        bt_notify "Could not connect to $name ($reason)" critical 4500
+    fi
+}
 
-    # Scan for 5 seconds
-    sleep 5
+# Disconnect helper
+bt_disconnect() {
+    local mac="$1"
+    local name="$2"
+    bt_notify "Disconnecting from $name..." normal 3000
 
-    # Terminate background scan
-    kill "$scan_pid" 2>/dev/null || true
-    bluetoothctl scan off >/dev/null 2>&1 || true
+    bluetoothctl --timeout 5 disconnect "$mac" </dev/null >/dev/null 2>&1
+    local info
+    info=$(bluetoothctl info "$mac" 2>/dev/null)
+    if ! echo "$info" | grep -q "Connected: yes"; then
+        bt_notify "Disconnected from $name" normal 3000
+    else
+        bt_notify "Failed to disconnect from $name" critical 4000
+    fi
+}
 
-    notify-send "Bluetooth" "Device list refreshed." -i bluetooth
+# Pair helper with auto-accept agent and connection handshake
+bt_pair() {
+    local mac="$1"
+    local name="$2"
+    bt_notify "Pairing with $name..." normal 12000
+    
+    # Start auto-accept agent in background
+    local script_dir
+    script_dir=$(dirname "$0")
+    local agent_pid=""
+    if [ -f "$script_dir/bt-agent.py" ]; then
+        python3 "$script_dir/bt-agent.py" </dev/null >/dev/null 2>&1 &
+        agent_pid=$!
+        sleep 0.5
+    fi
+
+    # Trust first to streamline connection
+    bluetoothctl trust "$mac" </dev/null >/dev/null 2>&1 || true
+
+    local pair_out
+    pair_out=$(bluetoothctl --timeout 15 pair "$mac" </dev/null 2>&1)
+    
+    local info
+    info=$(bluetoothctl info "$mac" 2>/dev/null)
+    local is_paired
+    is_paired=$(echo "$info" | grep -q "Paired: yes" && echo yes || echo no)
+
+    if [ "$is_paired" = "yes" ]; then
+        bt_notify "$name paired! Connecting..." normal 4000
+        # Allow audio / input services a brief moment to register
+        sleep 0.8
+        bluetoothctl --timeout 10 connect "$mac" </dev/null >/dev/null 2>&1
+        info=$(bluetoothctl info "$mac" 2>/dev/null)
+        if echo "$info" | grep -q "Connected: yes"; then
+            bt_notify "$name paired and connected successfully!" normal 3500
+        else
+            bt_notify "$name paired successfully." normal 3500
+        fi
+    else
+        # Try direct connection in case pair returned error on already-paired state
+        bluetoothctl --timeout 8 connect "$mac" </dev/null >/dev/null 2>&1
+        info=$(bluetoothctl info "$mac" 2>/dev/null)
+        if echo "$info" | grep -q "Connected: yes"; then
+            bt_notify "$name connected successfully!" normal 3500
+        else
+            local reason
+            reason=$(echo "$pair_out" | grep -iE "failed|error|not available|canceled|timeout|refused|auth" | head -n 1)
+            [ -z "$reason" ] && reason="Pairing timed out or rejected by device"
+            bt_notify "Pairing failed for $name ($reason)" critical 5000
+            bluetoothctl untrust "$mac" </dev/null >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Clean up agent
+    if [ -n "$agent_pid" ]; then
+        kill "$agent_pid" 2>/dev/null || true
+        wait "$agent_pid" 2>/dev/null || true
+    fi
 }
 
 # Fetch controller state
 controller_info=$(bluetoothctl show 2>/dev/null)
 if [ -z "$controller_info" ]; then
-    notify-send "Bluetooth Menu" "No Bluetooth controller found." -i bluetooth
+    bt_notify "No Bluetooth controller found." critical
     exit 1
 fi
 
-power_status=$(echo "$controller_info" | grep "Powered:" | awk '{print $2}')
+power_status=$(echo "$controller_info" | grep -E "^\s*Powered:" | awk '{print $2}')
 
 if [ "$power_status" = "no" ]; then
     chosen=$(printf "󰂯  Enable Bluetooth\n" | wofi --dmenu --prompt "Bluetooth (Disabled)" --width 420 --height 120)
     if [ "$chosen" = "󰂯  Enable Bluetooth" ]; then
-        bluetoothctl power on >/dev/null 2>&1
-        notify-send "Bluetooth" "Bluetooth enabled" -i bluetooth
+        bluetoothctl power on </dev/null >/dev/null 2>&1
+        bluetoothctl pairable on </dev/null >/dev/null 2>&1 || true
+        bt_notify "Bluetooth enabled" normal 2500
         sleep 1
         exec "$0"
     fi
     exit 0
 fi
 
+# Ensure controller is pairable and discoverable
+bluetoothctl pairable on </dev/null >/dev/null 2>&1 || true
+
 # Bluetooth is powered on
-discoverable_status=$(echo "$controller_info" | grep "Discoverable:" | awk '{print $2}')
+discoverable_status=$(echo "$controller_info" | grep -E "^\s*Discoverable:" | awk '{print $2}')
 
-# Start a quick scan to discover nearby devices automatically
-notify-send "Bluetooth" "Scanning for nearby devices..." -i bluetooth -t 1500
-bluetoothctl scan on >/dev/null 2>&1 &
-scan_pid=$!
-sleep 1.5
-kill "$scan_pid" 2>/dev/null || true
-bluetoothctl scan off >/dev/null 2>&1 || true
-
-# Load devices
+# Load devices from bluetoothctl
 device_list=$(bluetoothctl devices 2>/dev/null)
 
 declare -A mac_map
@@ -90,29 +176,52 @@ while IFS= read -r dev; do
 
     # Parse Device MAC Name
     mac=$(echo "$dev" | awk '{print $2}')
-    name=$(echo "$dev" | cut -d' ' -f3-)
-    [ -z "$name" ] && name="$mac"
+    raw_name=$(echo "$dev" | cut -d' ' -f3-)
 
     # Get device info
     info=$(bluetoothctl info "$mac" 2>/dev/null)
     [ -z "$info" ] && continue
 
+    alias_name=$(echo "$info" | grep -E "^\s*Alias:" | sed -e 's/^[[:space:]]*Alias:[[:space:]]*//')
+    dev_name=$(echo "$info" | grep -E "^\s*Name:" | sed -e 's/^[[:space:]]*Name:[[:space:]]*//')
+    
+    name="${alias_name:-${dev_name:-${raw_name:-$mac}}}"
+
     connected=$(echo "$info" | grep -q "Connected: yes" && echo yes || echo no)
     paired=$(echo "$info" | grep -q "Paired: yes" && echo yes || echo no)
     trusted=$(echo "$info" | grep -q "Trusted: yes" && echo yes || echo no)
+    icon_type=$(echo "$info" | grep -E "^\s*Icon:" | awk '{print $2}')
+
+    case "$icon_type" in
+        audio-card|audio-headset|audio-headphones)
+            dev_icon="󰋋"
+            ;;
+        input-keyboard)
+            dev_icon="󰌌"
+            ;;
+        input-mouse|input-gaming)
+            dev_icon="󰍽"
+            ;;
+        phone)
+            dev_icon="󰏲"
+            ;;
+        *)
+            dev_icon="󰂰"
+            ;;
+    esac
 
     if [ "$connected" = "yes" ]; then
-        display_line="●  $name   Connected"
+        display_line="●  $dev_icon  $name   Connected"
         connected_lines+="$display_line"$'\n'
         mac_map["$display_line"]="$mac"
         dev_state["$mac"]="connected|paired|$trusted|$name"
     elif [ "$paired" = "yes" ]; then
-        display_line="◆  $name"
+        display_line="◆  $dev_icon  $name"
         paired_lines+="$display_line"$'\n'
         mac_map["$display_line"]="$mac"
         dev_state["$mac"]="disconnected|paired|$trusted|$name"
     else
-        display_line="○  $name"
+        display_line="○  $dev_icon  $name"
         available_lines+="$display_line"$'\n'
         mac_map["$display_line"]="$mac"
         dev_state["$mac"]="disconnected|unpaired|$trusted|$name"
@@ -128,21 +237,31 @@ else
     menu_content+="󰂰  Enable Discoverability (Currently: Off)"$'\n'
 fi
 
-menu_content+="󰂰  Refresh Devices"$'\n'
+menu_content+="󰂰  Scan for Nearby Devices (8s)"$'\n'
+
+has_any_device=0
 
 if [ -n "$connected_lines" ]; then
     menu_content+="CONNECTED"$'\n'
     menu_content+="$connected_lines"$'\n'
+    has_any_device=1
 fi
 
-if [ "$paired_lines" != "" ]; then
+if [ -n "$paired_lines" ]; then
     menu_content+="PREVIOUSLY CONNECTED DEVICES"$'\n'
     menu_content+="$paired_lines"$'\n'
+    has_any_device=1
 fi
 
 if [ -n "$available_lines" ]; then
     menu_content+="AVAILABLE DEVICES"$'\n'
-    menu_content+="$available_lines"
+    menu_content+="$available_lines"$'\n'
+    has_any_device=1
+fi
+
+if [ "$has_any_device" -eq 0 ]; then
+    menu_content+="────────────────────────"$'\n'
+    menu_content+="○  No devices found (Put device in pairing mode & click 'Scan')"$'\n'
 fi
 
 # Show main menu
@@ -152,26 +271,25 @@ chosen=$(wofi --dmenu --prompt "Bluetooth" --width 420 --height 500 <<< "$menu_c
 # Handle static actions
 case "$chosen" in
     "󰂲  Disable Bluetooth")
-        bluetoothctl power off >/dev/null 2>&1
-        notify-send "Bluetooth" "Bluetooth disabled" -i bluetooth
+        bluetoothctl power off </dev/null >/dev/null 2>&1
+        bt_notify "Bluetooth disabled" normal 2000
         exit 0
         ;;
     "󰚦  Disable Discoverability (Currently: On)")
-        bluetoothctl discoverable off >/dev/null 2>&1
-        notify-send "Bluetooth" "Discoverability disabled" -i bluetooth
+        bluetoothctl discoverable off </dev/null >/dev/null 2>&1
+        bt_notify "Discoverability disabled" normal 2000
         exit 0
         ;;
     "󰂰  Enable Discoverability (Currently: Off)")
-        bluetoothctl discoverable on >/dev/null 2>&1
-        notify-send "Bluetooth" "Discoverability enabled" -i bluetooth
+        bluetoothctl discoverable on </dev/null >/dev/null 2>&1
+        bt_notify "Discoverability enabled" normal 2000
         exit 0
         ;;
-    "󰂰  Refresh Devices")
+    "󰂰  Scan for Nearby Devices (8s)"|"󰂰  Scan for Nearby Devices"|"󰂰  Refresh Devices")
         scan_devices
-        # Re-run menu script to show newly scanned devices
         exec "$0"
         ;;
-    "CONNECTED"|"PREVIOUSLY CONNECTED DEVICES"|"AVAILABLE DEVICES")
+    "CONNECTED"|"PREVIOUSLY CONNECTED DEVICES"|"AVAILABLE DEVICES"|"────────────────────────"|"○  No devices found (Put device in pairing mode & click 'Scan')")
         exit 0
         ;;
 esac
@@ -211,70 +329,30 @@ action_chosen=$(wofi --dmenu --prompt "$action_prompt" --width 420 --height 280 
 
 case "$action_chosen" in
     "󰂰  Connect")
-        notify-send "Bluetooth" "Connecting to $name..." -i bluetooth
-        if bluetoothctl connect "$mac" >/dev/null 2>&1; then
-            notify-send "Bluetooth" "Connected to $name" -i bluetooth
-        else
-            notify-send "Bluetooth" "Could not connect to $name" -i bluetooth
-        fi
+        bt_connect "$mac" "$name"
         ;;
     "󰂲  Disconnect")
-        notify-send "Bluetooth" "Disconnecting from $name..." -i bluetooth
-        if bluetoothctl disconnect "$mac" >/dev/null 2>&1; then
-            notify-send "Bluetooth" "Disconnected from $name" -i bluetooth
-        else
-            notify-send "Bluetooth" "Could not disconnect from $name" -i bluetooth
-        fi
+        bt_disconnect "$mac" "$name"
         ;;
     "󰌆  Pair")
-        notify-send "Bluetooth" "Pairing with $name..." -i bluetooth
-        
-        # Start our custom auto-accept agent in the background
-        script_dir=$(dirname "$0")
-        python3 "$script_dir/bt-agent.py" >/dev/null 2>&1 &
-        agent_pid=$!
-        sleep 0.5
-
-        # Trust first to facilitate the connection
-        bluetoothctl trust "$mac" >/dev/null 2>&1
-
-        # Attempt pairing (which will query the running agent for confirmations)
-        if bluetoothctl pair "$mac" >/dev/null 2>&1; then
-            notify-send "Bluetooth" "$name paired successfully" -i bluetooth
-            bluetoothctl connect "$mac" >/dev/null 2>&1 || true
-        else
-            # Try connecting directly in case it succeeded but pair command exited with non-zero
-            if bluetoothctl connect "$mac" >/dev/null 2>&1; then
-                notify-send "Bluetooth" "$name connected successfully" -i bluetooth
-            else
-                notify-send "Bluetooth" "Pairing failed for $name" -i bluetooth
-                # Untrust if pairing failed
-                bluetoothctl untrust "$mac" >/dev/null 2>&1 || true
-            fi
-        fi
-
-        # Clean up the background agent
-        kill "$agent_pid" 2>/dev/null || true
-        wait "$agent_pid" 2>/dev/null || true
+        bt_pair "$mac" "$name"
         ;;
     "󰌆  Trust Device")
-        if bluetoothctl trust "$mac" >/dev/null 2>&1; then
-            notify-send "Bluetooth" "$name is now trusted" -i bluetooth
-        fi
+        bluetoothctl trust "$mac" </dev/null >/dev/null 2>&1
+        bt_notify "$name is now trusted" normal 2500
         ;;
     "󰌆  Untrust Device")
-        if bluetoothctl untrust "$mac" >/dev/null 2>&1; then
-            notify-send "Bluetooth" "$name is no longer trusted" -i bluetooth
-        fi
+        bluetoothctl untrust "$mac" </dev/null >/dev/null 2>&1
+        bt_notify "$name is no longer trusted" normal 2500
         ;;
     "󰆴  Remove / Forget device")
         confirm=$(printf "Yes\nNo\n" | wofi --dmenu --prompt "Forget $name?" --width 420 --height 150)
         if [ "$confirm" = "Yes" ]; then
-            bluetoothctl disconnect "$mac" >/dev/null 2>&1 || true
-            if bluetoothctl remove "$mac" >/dev/null 2>&1; then
-                notify-send "Bluetooth" "Removed device $name" -i bluetooth
+            bluetoothctl disconnect "$mac" </dev/null >/dev/null 2>&1 || true
+            if bluetoothctl remove "$mac" </dev/null >/dev/null 2>&1; then
+                bt_notify "Removed device $name" normal 2500
             else
-                notify-send "Bluetooth" "Failed to remove device" -i bluetooth
+                bt_notify "Failed to remove device" critical 3500
             fi
         fi
         ;;

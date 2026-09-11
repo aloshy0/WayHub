@@ -72,9 +72,13 @@ if __name__ == "__main__":
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
 
-    agent = Agent(bus, AGENT_PATH)
-    
     manager = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.AgentManager1")
+    try:
+        manager.UnregisterAgent(AGENT_PATH)
+    except Exception:
+        pass
+
+    agent = Agent(bus, AGENT_PATH)
     manager.RegisterAgent(AGENT_PATH, "KeyboardDisplay")
     manager.RequestDefaultAgent(AGENT_PATH)
     
