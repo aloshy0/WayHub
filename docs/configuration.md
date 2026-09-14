@@ -20,6 +20,12 @@ In [config.jsonc](file:///home/michael/Projects/waybar/waybar/config.jsonc), you
 * **Height**: Adjust `"height": 30` to make the bar thicker or thinner.
 * **Margins**: Set top/left/right margins to control gaps around the status bar.
 
+### Display Modes & Autohide
+Waybar supports two toggleable modes:
+* **Fixed Mode** (Default): The bar is permanently docked to the top (`exclusive: true`), reserving screen space.
+* **Autohide Mode**: The bar floats on top (`exclusive: false`) and remains hidden until the cursor is brought near the top edge of the screen.
+* **Toggle Shortcut**: Press `Super + W` to seamlessly toggle between Fixed and Autohide modes.
+
 ### Sizing and Spacing
 In [style.css](file:///home/michael/Projects/waybar/waybar/style.css):
 * Modifying the border-radius of `#custom-launcher`, `#network`, `#bluetooth`, etc. allows you to change the roundness of the buttons.

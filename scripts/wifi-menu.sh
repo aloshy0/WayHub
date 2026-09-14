@@ -5,20 +5,44 @@
 
 set -u
 
+# Notification helper using Dunst stack tagging for clean replacement
+wifi_notify() {
+    local text="$1"
+    local urgency="${2:-normal}" # normal, low, critical
+    local timeout="${3:-3500}"
+    local icon="network-wireless"
+    [ "$urgency" = "critical" ] && icon="network-wireless-error"
+    notify-send -a "Wi-Fi" -u "$urgency" -i "$icon" -t "$timeout" -h string:x-dunst-stack-tag:wifi "Wi-Fi" "$text"
+}
+
 # Check if NetworkManager is running
 if ! nmcli general status >/dev/null 2>&1; then
-    notify-send "Wi-Fi Menu" "NetworkManager is not running." -i network-wireless
+    wifi_notify "NetworkManager is not running." critical 5000
     exit 1
 fi
 
 # Find a Wi-Fi device
 wifi_device=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2 == "wifi" {print $1; exit}')
 if [ -z "$wifi_device" ]; then
-    notify-send "Wi-Fi Menu" "No Wi-Fi adapter found." -i network-wireless
+    wifi_notify "No Wi-Fi adapter found." critical 5000
     exit 1
 fi
 
-# Function to manage saved networks
+# Ensure Wi-Fi adapter allows automatic connections
+nmcli device set "$wifi_device" autoconnect yes >/dev/null 2>&1 || true
+
+# Gather saved Wi-Fi connection profiles (mapping SSID -> Profile Name)
+declare -A saved_conn_map
+
+while IFS=: read -r name uuid type autoconnect; do
+    if [ "$type" = "802-11-wireless" ]; then
+        ssid_val=$(nmcli -g 802-11-wireless.ssid connection show "$uuid" 2>/dev/null)
+        [ -z "$ssid_val" ] && ssid_val="$name"
+        saved_conn_map["$ssid_val"]="$name"
+    fi
+done < <(nmcli -t -f NAME,UUID,TYPE,AUTOCONNECT connection show 2>/dev/null)
+
+# Helper function to manage saved networks
 show_saved_networks() {
     local saved_connections
     saved_connections=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" {print $1}')
@@ -55,11 +79,12 @@ show_saved_networks() {
 
     case "$action" in
         "󰤨  Connect")
-            notify-send "Wi-Fi" "Connecting to $connection_name..." -i network-wireless
-            if nmcli connection up "$connection_name" >/dev/null 2>&1; then
-                notify-send "Wi-Fi" "Connected to $connection_name" -i network-wireless
+            wifi_notify "Connecting to $connection_name..." normal 5000
+            if nmcli connection up id "$connection_name" >/dev/null 2>&1 || nmcli connection up "$connection_name" >/dev/null 2>&1; then
+                nmcli connection modify "$connection_name" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+                wifi_notify "Connected to $connection_name" normal 3000
             else
-                notify-send "Wi-Fi" "Failed to connect to $connection_name" -i network-wireless-error
+                wifi_notify "Failed to connect to $connection_name" critical 4000
             fi
             ;;
         "󰌆  Show Password")
@@ -81,15 +106,16 @@ show_saved_networks() {
             [ -z "$new_password" ] && return
 
             if nmcli connection modify "$connection_name" 802-11-wireless-security.psk "$new_password" 2>/dev/null; then
-                notify-send "Wi-Fi" "Password updated. Reconnecting..." -i network-wireless
+                wifi_notify "Password updated. Reconnecting..." normal 4000
                 nmcli connection down "$connection_name" >/dev/null 2>&1 || true
                 if nmcli connection up "$connection_name" >/dev/null 2>&1; then
-                    notify-send "Wi-Fi" "Connected to $connection_name" -i network-wireless
+                    nmcli connection modify "$connection_name" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+                    wifi_notify "Connected to $connection_name" normal 3000
                 else
-                    notify-send "Wi-Fi" "Failed to reconnect to $connection_name" -i network-wireless-error
+                    wifi_notify "Failed to reconnect to $connection_name" critical 4000
                 fi
             else
-                notify-send "Wi-Fi" "Failed to update password" -i network-wireless-error
+                wifi_notify "Failed to update password" critical 4000
             fi
             ;;
         "󰆴  Forget Network")
@@ -97,9 +123,9 @@ show_saved_networks() {
             confirm=$(printf "Yes\nNo\n" | wofi --dmenu --prompt "Forget $connection_name?" --width 420 --height 150)
             if [ "$confirm" = "Yes" ]; then
                 if nmcli connection delete "$connection_name" >/dev/null 2>&1; then
-                    notify-send "Wi-Fi" "Forgot network $connection_name" -i network-wireless
+                    wifi_notify "Forgot network $connection_name" normal 3000
                 else
-                    notify-send "Wi-Fi" "Failed to forget network" -i network-wireless-error
+                    wifi_notify "Failed to forget network" critical 4000
                 fi
             fi
             ;;
@@ -117,7 +143,7 @@ if [ "$wifi_state" = "disabled" ]; then
     case "$chosen" in
         "󰤨  Turn On Wi-Fi")
             nmcli radio wifi on
-            notify-send "Wi-Fi" "Wi-Fi turned on" -i network-wireless
+            wifi_notify "Wi-Fi turned on" normal 2500
             ;;
         "󰌆  SAVED NETWORKS")
             show_saved_networks
@@ -126,10 +152,7 @@ if [ "$wifi_state" = "disabled" ]; then
     exit 0
 fi
 
-# Wi-Fi is enabled. Gather current connections and scan results.
-saved_list=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" {print $1}')
-
-# Fetch scan results in multiline mode to parse SSID safely (no rescan on start to prevent menu delay)
+# Wi-Fi is enabled. Gather scan results (no rescan on open for fast menu response)
 wifi_list_output=$(nmcli -m multiline -f ACTIVE,SSID,SIGNAL,SECURITY device wifi list --rescan no 2>/dev/null)
 
 declare -A ssid_map
@@ -170,6 +193,7 @@ while IFS= read -r line; do
 done <<< "$wifi_list_output"
 
 connected_line=""
+connected_ssid=""
 available_lines=""
 
 # Sort SSIDs by signal strength
@@ -195,9 +219,17 @@ while IFS= read -r ssid; do
 
     if [ "$active" = "yes" ]; then
         connected_line="$icon  $ssid   Connected"
+        connected_ssid="$ssid"
         ssid_map["$connected_line"]="$ssid"
     else
-        display_line="$icon  $ssid  [$signal%]"
+        # Check if this SSID is already in saved connections
+        if [ -n "${saved_conn_map["$ssid"]:-}" ]; then
+            display_line="$icon  $ssid  [$signal%]  󰌆 Saved"
+        elif [ -n "$security" ] && [ "$security" != "--" ]; then
+            display_line="$icon  $ssid  [$signal%]  󰌾"
+        else
+            display_line="$icon  $ssid  [$signal%]"
+        fi
         available_lines+="$display_line"$'\n'
         ssid_map["$display_line"]="$ssid"
     fi
@@ -227,11 +259,12 @@ chosen=$(wofi --dmenu --prompt "Wi-Fi" --width 420 --height 500 <<< "$menu_conte
 # Handle static actions
 if [ "$chosen" = "󰤮  Turn Off Wi-Fi" ]; then
     nmcli radio wifi off
-    notify-send "Wi-Fi" "Wi-Fi turned off" -i network-wireless
+    wifi_notify "Wi-Fi turned off" normal 2500
     exit 0
 elif [ "$chosen" = "󰂰  Refresh Networks" ]; then
-    notify-send "Wi-Fi" "Refreshing network list..." -i network-wireless
-    nmcli device wifi list --rescan yes >/dev/null 2>&1 || true
+    wifi_notify "Refreshing network list..." normal 2500
+    nmcli device wifi rescan >/dev/null 2>&1 || nmcli device wifi list --rescan yes >/dev/null 2>&1 || true
+    sleep 1
     exec "$0"
 elif [ "$chosen" = "󰌆  SAVED NETWORKS" ]; then
     show_saved_networks
@@ -244,21 +277,39 @@ fi
 ssid="${ssid_map["$chosen"]:-}"
 [ -z "$ssid" ] && exit 0
 
-# If selected connected network, offer management options
+# If selected the currently connected network, offer management options
 if [ "$chosen" = "$connected_line" ]; then
-    action=$(printf "Disconnect\nForget Network\nBack\n" | wofi --dmenu --prompt "$ssid" --width 420 --height 220)
+    action=$(printf "󰤮  Disconnect\n󰌆  Show Password\n󰆴  Forget Network\n󰁍  Back\n" | wofi --dmenu --prompt "$ssid" --width 420 --height 240)
     case "$action" in
-        "Disconnect")
-            notify-send "Wi-Fi" "Disconnecting from $ssid..." -i network-wireless
-            nmcli device disconnect "$wifi_device" >/dev/null 2>&1
+        "󰤮  Disconnect")
+            wifi_notify "Disconnecting from $ssid..." normal 3000
+            conn_name="${saved_conn_map["$ssid"]:-$ssid}"
+            nmcli connection down "$conn_name" >/dev/null 2>&1 || nmcli device disconnect "$wifi_device" >/dev/null 2>&1
+            # Keep device autoconnect enabled so auto-reconnect works on future connections
+            nmcli device set "$wifi_device" autoconnect yes >/dev/null 2>&1 || true
+            wifi_notify "Disconnected from $ssid" normal 2500
             ;;
-        "Forget Network")
+        "󰌆  Show Password")
+            conn_name="${saved_conn_map["$ssid"]:-$ssid}"
+            password=$(nmcli --show-secrets -g 802-11-wireless-security.psk connection show "$conn_name" 2>/dev/null)
+            if [ -z "$password" ]; then
+                password=$(nmcli --show-secrets -g 802-11-wireless-security.wep-key0 connection show "$conn_name" 2>/dev/null)
+            fi
+
+            if [ -n "$password" ]; then
+                wofi --dmenu --prompt "Password" --width 420 --height 120 <<< "$password" >/dev/null
+            else
+                wofi --dmenu --prompt "Error" --width 420 --height 120 <<< "No password stored" >/dev/null
+            fi
+            ;;
+        "󰆴  Forget Network")
             confirm=$(printf "Yes\nNo\n" | wofi --dmenu --prompt "Forget $ssid?" --width 420 --height 150)
             if [ "$confirm" = "Yes" ]; then
-                if nmcli connection delete "$ssid" >/dev/null 2>&1; then
-                    notify-send "Wi-Fi" "Forgot network $ssid" -i network-wireless
+                conn_name="${saved_conn_map["$ssid"]:-$ssid}"
+                if nmcli connection delete "$conn_name" >/dev/null 2>&1; then
+                    wifi_notify "Forgot network $ssid" normal 3000
                 else
-                    notify-send "Wi-Fi" "Failed to forget network" -i network-wireless-error
+                    wifi_notify "Failed to forget network" critical 4000
                 fi
             fi
             ;;
@@ -266,24 +317,50 @@ if [ "$chosen" = "$connected_line" ]; then
     exit 0
 fi
 
-# Connect to new network
-security="${ssid_security["$ssid"]:-}"
+# Connect to selected network
+saved_name="${saved_conn_map["$ssid"]:-}"
 
-if [ -n "$security" ] && [ "$security" != "--" ]; then
-    password=$(wofi --dmenu --password --prompt "Password" --width 420 --height 120)
-    [ -z "$password" ] && exit 0
-
-    notify-send "Wi-Fi" "Connecting to $ssid..." -i network-wireless
-    if nmcli device wifi connect "$ssid" password "$password" >/dev/null 2>&1; then
-        notify-send "Wi-Fi" "Connected to $ssid" -i network-wireless
+if [ -n "$saved_name" ]; then
+    # Network is already saved: connect directly without prompting for password
+    wifi_notify "Connecting to $ssid..." normal 5000
+    if nmcli connection up id "$saved_name" >/dev/null 2>&1 || nmcli connection up "$saved_name" >/dev/null 2>&1; then
+        nmcli connection modify "$saved_name" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+        wifi_notify "Connected to $ssid" normal 3000
     else
-        notify-send "Wi-Fi" "Failed to connect to $ssid" -i network-wireless-error
+        wifi_notify "Saved connection failed. Please enter password." critical 3500
+        password=$(wofi --dmenu --password --prompt "Password for $ssid" --width 420 --height 120)
+        [ -z "$password" ] && exit 0
+
+        wifi_notify "Connecting to $ssid..." normal 6000
+        if nmcli device wifi connect "$ssid" password "$password" >/dev/null 2>&1; then
+            nmcli connection modify "$ssid" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+            wifi_notify "Connected to $ssid" normal 3000
+        else
+            wifi_notify "Failed to connect to $ssid" critical 4500
+        fi
     fi
 else
-    notify-send "Wi-Fi" "Connecting to open network $ssid..." -i network-wireless
-    if nmcli device wifi connect "$ssid" >/dev/null 2>&1; then
-        notify-send "Wi-Fi" "Connected to $ssid" -i network-wireless
+    # Network is not saved: check if security is required
+    security="${ssid_security["$ssid"]:-}"
+
+    if [ -n "$security" ] && [ "$security" != "--" ]; then
+        password=$(wofi --dmenu --password --prompt "Password for $ssid" --width 420 --height 120)
+        [ -z "$password" ] && exit 0
+
+        wifi_notify "Connecting to $ssid..." normal 6000
+        if nmcli device wifi connect "$ssid" password "$password" >/dev/null 2>&1; then
+            nmcli connection modify "$ssid" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+            wifi_notify "Connected to $ssid" normal 3000
+        else
+            wifi_notify "Failed to connect to $ssid" critical 4500
+        fi
     else
-        notify-send "Wi-Fi" "Failed to connect to $ssid" -i network-wireless-error
+        wifi_notify "Connecting to open network $ssid..." normal 5000
+        if nmcli device wifi connect "$ssid" >/dev/null 2>&1; then
+            nmcli connection modify "$ssid" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+            wifi_notify "Connected to $ssid" normal 3000
+        else
+            wifi_notify "Failed to connect to $ssid" critical 4500
+        fi
     fi
 fi

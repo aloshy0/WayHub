@@ -7,8 +7,75 @@
 }
 
 window#waybar {
-    background: transparent;
+    background-color: rgba(10, 10, 14, 0.01);
     color: #cdd6f4;
+}
+
+/* =========================
+   AUTOHIDE OPACITY RULES
+   ========================= */
+
+.module,
+#custom-launcher,
+#group-workspaces,
+#group-apps,
+#group-system,
+#workspaces,
+#workspaces button,
+#clock,
+#window,
+#network,
+#bluetooth,
+#pulseaudio,
+#battery,
+#custom-battery,
+#cpu,
+#memory,
+#backlight {
+    opacity: 0;
+    transition: opacity 0.25s ease-in-out;
+}
+
+/* Reveal when cursor is brought near the top bar (hover) */
+window#waybar:hover .module,
+window#waybar:hover #custom-launcher,
+window#waybar:hover #group-workspaces,
+window#waybar:hover #group-apps,
+window#waybar:hover #group-system,
+window#waybar:hover #workspaces,
+window#waybar:hover #workspaces button,
+window#waybar:hover #clock,
+window#waybar:hover #window,
+window#waybar:hover #network,
+window#waybar:hover #bluetooth,
+window#waybar:hover #pulseaudio,
+window#waybar:hover #battery,
+window#waybar:hover #custom-battery,
+window#waybar:hover #cpu,
+window#waybar:hover #memory,
+window#waybar:hover #backlight {
+    opacity: 1;
+}
+
+/* Reveal when active workspace has no windows (empty desktop) */
+window#waybar.empty .module,
+window#waybar.empty #custom-launcher,
+window#waybar.empty #group-workspaces,
+window#waybar.empty #group-apps,
+window#waybar.empty #group-system,
+window#waybar.empty #workspaces,
+window#waybar.empty #workspaces button,
+window#waybar.empty #clock,
+window#waybar.empty #window,
+window#waybar.empty #network,
+window#waybar.empty #bluetooth,
+window#waybar.empty #pulseaudio,
+window#waybar.empty #battery,
+window#waybar.empty #custom-battery,
+window#waybar.empty #cpu,
+window#waybar.empty #memory,
+window#waybar.empty #backlight {
+    opacity: 1;
 }
 
 /* =========================
@@ -46,10 +113,8 @@ window#waybar {
 #memory {
     min-width: 38px;
     min-height: 38px;
-
     padding: 0;
-    margin: 1px 2px;
-
+    margin: 3px 2px;
 }
 
 /* Keep the icons centered */
@@ -108,7 +173,7 @@ window#waybar {
 
 #group-system {
     padding: 0;
-    margin: 0;
+    margin: 0 5px 0 0;
     background: transparent;
     border: none;
 }
@@ -123,7 +188,7 @@ window#waybar {
     min-width: 32px;
     min-height: 38px;
     padding: 0;
-    margin: 1px 2px;
+    margin: 3px 2px 3px 5px;
     border: 2px solid #50505a;
     border-radius: 14px;
 }
@@ -134,7 +199,7 @@ window#waybar {
 
 #group-workspaces {
     padding: 1px 4px;
-    margin: 1px 2px;
+    margin: 3px 2px;
 }
 
 #workspaces button {
@@ -158,7 +223,7 @@ window#waybar {
 
 #group-apps {
     padding: 1px 4px;
-    margin: 1px 2px;
+    margin: 3px 2px;
 }
 
 #custom-terminal,
@@ -184,7 +249,7 @@ window#waybar {
     color: #eeeeee;
     padding-left: 10px;
     padding-right: 10px;
-    margin: 1px 2px;
+    margin: 3px 2px;
 }
 
 /* =========================
@@ -195,7 +260,7 @@ window#waybar {
     color: #d0d0d0;
     padding-left: 9px;
     padding-right: 9px;
-    margin: 1px 2px;
+    margin: 3px 2px;
 }
 
 /* =========================
@@ -272,4 +337,3 @@ window#waybar {
     background: rgba(30, 30, 40, 0.95);
     border-color: #d16cff;
 }
-

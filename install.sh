@@ -103,25 +103,44 @@ safe_install() {
 # 2. Install Waybar files
 echo -e "${YELLOW}Installing Waybar files...${NC}"
 safe_install "waybar/config.jsonc" "$HOME/.config/waybar/config.jsonc"
+safe_install "waybar/config-autohide.jsonc" "$HOME/.config/waybar/config-autohide.jsonc"
 safe_install "waybar/style.css" "$HOME/.config/waybar/style.css"
+safe_install "waybar/style-autohide.css" "$HOME/.config/waybar/style-autohide.css"
 
 # 3. Install scripts
 echo -e "${YELLOW}Installing helper scripts...${NC}"
 safe_install "scripts/wifi-menu.sh" "$HOME/.config/waybar/wifi-menu.sh"
 safe_install "scripts/bluetooth-menu.sh" "$HOME/.config/waybar/bluetooth-menu.sh"
 safe_install "scripts/bt-agent.py" "$HOME/.config/waybar/bt-agent.py"
+safe_install "scripts/battery.py" "$HOME/.config/waybar/battery.py"
+safe_install "scripts/power-profile-toggle.sh" "$HOME/.config/waybar/power-profile-toggle.sh"
+safe_install "scripts/toggle-mode.sh" "$HOME/.config/waybar/toggle-mode.sh"
+safe_install "scripts/launch.sh" "$HOME/.config/waybar/launch.sh"
 chmod +x "$HOME/.config/waybar/wifi-menu.sh"
 chmod +x "$HOME/.config/waybar/bluetooth-menu.sh"
 chmod +x "$HOME/.config/waybar/bt-agent.py"
+chmod +x "$HOME/.config/waybar/battery.py"
+chmod +x "$HOME/.config/waybar/power-profile-toggle.sh"
+chmod +x "$HOME/.config/waybar/toggle-mode.sh"
+chmod +x "$HOME/.config/waybar/launch.sh"
 
 # 4. Install Wofi files
 echo -e "${YELLOW}Installing Wofi files...${NC}"
 safe_install "wofi/config" "$HOME/.config/wofi/config"
 safe_install "wofi/style.css" "$HOME/.config/wofi/style.css"
 
+# 5. Optimize NetworkManager Wi-Fi profiles for auto-reconnect
+if command -v nmcli >/dev/null 2>&1 && nmcli general status >/dev/null 2>&1; then
+    echo -e "${YELLOW}Configuring saved Wi-Fi profiles for auto-reconnect...${NC}"
+    while IFS= read -r conn; do
+        [ -z "$conn" ] && continue
+        nmcli connection modify "$conn" connection.autoconnect yes connection.autoconnect-retries 0 2>/dev/null || true
+    done < <(nmcli -t -f NAME,TYPE connection show | awk -F: '$2 == "802-11-wireless" {print $1}')
+fi
+
 echo -e "\n${GREEN}Files installed successfully!${NC}"
 
-# 5. Reload/restart Waybar if running
+# 6. Reload/restart Waybar if running
 if pgrep -x waybar >/dev/null 2>&1; then
     echo -e "${YELLOW}Detected active Waybar process. Sending reload signal (SIGUSR2)...${NC}"
     killall -USR2 waybar
