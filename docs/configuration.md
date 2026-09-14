@@ -20,11 +20,12 @@ In [config.jsonc](file:///home/michael/Projects/waybar/waybar/config.jsonc), you
 * **Height**: Adjust `"height": 30` to make the bar thicker or thinner.
 * **Margins**: Set top/left/right margins to control gaps around the status bar.
 
-### Display Modes & Autohide
-Waybar supports two toggleable modes:
+### Display Modes & Shortcuts
+Waybar supports flexible display modes and shortcuts:
 * **Fixed Mode** (Default): The bar is permanently docked to the top (`exclusive: true`), reserving screen space.
-* **Autohide Mode**: The bar floats on top (`exclusive: false`) and remains hidden until the cursor is brought near the top edge of the screen.
-* **Toggle Shortcut**: Press `Super + W` to seamlessly toggle between Fixed and Autohide modes.
+* **Autohide Mode**: The bar is hidden completely until the cursor touches the top edge of the screen (`y <= 2px`), seamlessly sliding into view. When the cursor moves away, it automatically hides after a brief delay. When hidden, Waybar releases the input layer completely, ensuring 100% click-through to underlying application tabs and titlebars without phantom clicks.
+* **Toggle Mode Shortcut**: Press `Super + W` (or run `~/.config/waybar/toggle-mode.sh`) to toggle between Fixed and Autohide modes.
+* **Manual Hide / Show (No Autohide)**: Press `Super + Shift + W` (or run `~/.config/waybar/toggle-visibility.sh`) to manually toggle Waybar visibility on/off without autohide hovering.
 
 ### Sizing and Spacing
 In [style.css](file:///home/michael/Projects/waybar/waybar/style.css):

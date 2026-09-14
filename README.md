@@ -116,22 +116,31 @@ WayHub/
 ├── .gitignore            # Git ignore rules
 │
 ├── waybar/
-│   ├── config.jsonc      # Customized Waybar layout config
-│   └── style.css         # Waybar styling with interactive hover states
+│   ├── config.jsonc          # Fixed mode Waybar layout config
+│   ├── config-autohide.jsonc # Autohide mode Waybar layout config
+│   ├── style.css             # Fixed mode styling
+│   └── style-autohide.css    # Autohide mode styling
 │
 ├── wofi/
-│   ├── config            # Wofi layout configuration
-│   └── style.css         # Glassmorphism/modern dark Wofi theme
+│   ├── config                # Wofi layout configuration
+│   └── style.css             # Glassmorphism/modern dark Wofi theme
 │
 ├── scripts/
-│   ├── wifi-menu.sh      # Wofi Wi-Fi manager script
-│   └── bluetooth-menu.sh # Wofi Bluetooth manager script
+│   ├── wifi-menu.sh          # Wofi Wi-Fi manager script
+│   ├── bluetooth-menu.sh     # Wofi Bluetooth manager script
+│   ├── bt-agent.py           # Automated Bluetooth pairing agent
+│   ├── battery.py            # Custom battery status and profile indicator
+│   ├── power-profile-toggle.sh # Power profile cycle toggle script
+│   ├── autohide-daemon.py    # Edge-trigger hover autohide watcher daemon
+│   ├── toggle-mode.sh        # Mode switcher (Fixed <-> Autohide)
+│   ├── toggle-visibility.sh  # Manual visibility toggle (No autohide)
+│   └── launch.sh             # Desktop autostart helper script
 │
 ├── assets/
-│   └── screenshots/      # Screenshots directory
+│   └── screenshots/          # Screenshots directory
 │
 └── docs/
-    └── configuration.md  # Detailed customization guidelines
+    └── configuration.md      # Detailed customization guidelines
 ```
 
 ---

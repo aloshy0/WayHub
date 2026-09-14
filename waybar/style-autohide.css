@@ -7,75 +7,8 @@
 }
 
 window#waybar {
-    background-color: rgba(10, 10, 14, 0.01);
+    background: transparent;
     color: #cdd6f4;
-}
-
-/* =========================
-   AUTOHIDE OPACITY RULES
-   ========================= */
-
-.module,
-#custom-launcher,
-#group-workspaces,
-#group-apps,
-#group-system,
-#workspaces,
-#workspaces button,
-#clock,
-#window,
-#network,
-#bluetooth,
-#pulseaudio,
-#battery,
-#custom-battery,
-#cpu,
-#memory,
-#backlight {
-    opacity: 0;
-    transition: opacity 0.25s ease-in-out;
-}
-
-/* Reveal when cursor is brought near the top bar (hover) */
-window#waybar:hover .module,
-window#waybar:hover #custom-launcher,
-window#waybar:hover #group-workspaces,
-window#waybar:hover #group-apps,
-window#waybar:hover #group-system,
-window#waybar:hover #workspaces,
-window#waybar:hover #workspaces button,
-window#waybar:hover #clock,
-window#waybar:hover #window,
-window#waybar:hover #network,
-window#waybar:hover #bluetooth,
-window#waybar:hover #pulseaudio,
-window#waybar:hover #battery,
-window#waybar:hover #custom-battery,
-window#waybar:hover #cpu,
-window#waybar:hover #memory,
-window#waybar:hover #backlight {
-    opacity: 1;
-}
-
-/* Reveal when active workspace has no windows (empty desktop) */
-window#waybar.empty .module,
-window#waybar.empty #custom-launcher,
-window#waybar.empty #group-workspaces,
-window#waybar.empty #group-apps,
-window#waybar.empty #group-system,
-window#waybar.empty #workspaces,
-window#waybar.empty #workspaces button,
-window#waybar.empty #clock,
-window#waybar.empty #window,
-window#waybar.empty #network,
-window#waybar.empty #bluetooth,
-window#waybar.empty #pulseaudio,
-window#waybar.empty #battery,
-window#waybar.empty #custom-battery,
-window#waybar.empty #cpu,
-window#waybar.empty #memory,
-window#waybar.empty #backlight {
-    opacity: 1;
 }
 
 /* =========================

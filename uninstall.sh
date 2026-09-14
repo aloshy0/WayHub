@@ -17,10 +17,18 @@ echo -e "==========================================${NC}\n"
 
 files_to_remove=(
     "$HOME/.config/waybar/config.jsonc"
+    "$HOME/.config/waybar/config-autohide.jsonc"
     "$HOME/.config/waybar/style.css"
+    "$HOME/.config/waybar/style-autohide.css"
     "$HOME/.config/waybar/wifi-menu.sh"
     "$HOME/.config/waybar/bluetooth-menu.sh"
     "$HOME/.config/waybar/bt-agent.py"
+    "$HOME/.config/waybar/battery.py"
+    "$HOME/.config/waybar/power-profile-toggle.sh"
+    "$HOME/.config/waybar/toggle-mode.sh"
+    "$HOME/.config/waybar/toggle-visibility.sh"
+    "$HOME/.config/waybar/launch.sh"
+    "$HOME/.config/waybar/autohide-daemon.py"
     "$HOME/.config/wofi/config"
     "$HOME/.config/wofi/style.css"
 )
