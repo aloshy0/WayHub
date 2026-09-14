@@ -26,6 +26,17 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 - **Device Options Sub-menu**: Connect, Disconnect, Trust, Untrust, Pair (with agent support), and Remove/Forget.
 - **Process Cleanup**: Active background scans are safely cleaned up on exit using Bash traps.
 
+### 󱈑 Battery & Power Profiles (`battery.py` & `power-profile-toggle.sh`)
+- **Dynamic Battery State**: Accurately tracks charge percentage, charging status, and battery health via UPower/sysfs.
+- **Power Profile Switching**: Left-click the battery pill to seamlessly cycle through power profiles (`performance` 󰓅, `balanced` 󰾅, `power-saver` / `eco` 󰌪).
+- **Eco Mode Highlighting**: Automatically changes pill colors to emerald green during Power Saver mode for clear visual feedback.
+
+###  Flexible Display Modes & Proper Autohide
+- **Fixed Mode**: The bar is docked to the top (`exclusive: true`), reserving space for tiled windows.
+- **Autohide Mode**: Uses a sub-millisecond Hyprland socket daemon (`autohide-daemon.py`) to reveal the bar when hovering the top edge (`y <= 2px`) and hide when cursor leaves.
+- **Clean Click-Through**: Unmaps layer input when hidden, completely eliminating invisible ghost clicks over browser tabs, editor headers, and window buttons.
+- **Multi-Monitor Support**: Works seamlessly across all outputs, scaling factors, and multi-monitor setups.
+
 ---
 
 ## Requirements
@@ -65,7 +76,7 @@ chmod +x install.sh
 ### What the installer does:
 1. **Verifies Dependencies**: Scans your system for all required tools and libraries (such as `waybar`, `wofi`, `networkmanager`, `bluez`, `python-dbus`, etc.), and asks for permission to install missing ones using `pacman`.
 2. **Backs Up Existing Configurations**: If you already have configurations or scripts in `~/.config/waybar/` or `~/.config/wofi/`, the installer automatically creates safe, timestamped backups (e.g., `config.jsonc.YYYYMMDD_HHMMSS.bak`) before proceeding.
-3. **Installs Configurations & Scripts**: Copies the custom config files and scripts (including the Wi-Fi/Bluetooth menu scripts and the background Bluetooth agent helper) to your config directory and marks the scripts as executable.
+3. **Installs Configurations & Scripts**: Copies the custom config files and scripts (including the Wi-Fi/Bluetooth menu scripts, battery helper, and autohide daemon) to your config directory and marks the scripts as executable.
 4. **Reloads Waybar**: Sends a `SIGUSR2` signal to active instances of Waybar, updating your status bar styling immediately without requiring a system reboot.
 
 ---
@@ -85,7 +96,13 @@ This utility removes the installed configurations and helper scripts, while leav
 
 ---
 
-## Usage
+## Usage & Shortcuts
+
+### Desktop Shortcuts (Hyprland)
+| Shortcut | Action | Description |
+| :--- | :--- | :--- |
+| **`Super + Shift + W`** | **Manual Hide / Show** | Instantly toggles the topbar visibility on/off across all desktop windows. When hidden, windows expand full-screen and the bar stays hidden (no mouse-hover auto-popup). |
+| **`Super + W`** | **Toggle Autohide Mode** | Switches between Fixed mode (permanently docked) and Autohide mode (reveals when cursor touches screen top edge). |
 
 ### Waybar Interactions
 - **Wi-Fi Module**:
@@ -95,6 +112,10 @@ This utility removes the installed configurations and helper scripts, while leav
   - **Left-Click**: Opens the Wofi Bluetooth menu.
   - **Right-Click**: Quick power off.
   - **Middle-Click**: Quick power on.
+- **Battery Module**:
+  - **Left-Click**: Cycles power profiles (Performance / Balanced / Power Saver).
+- **Launcher Module (``)**:
+  - **Left-Click**: Toggles application menu.
 
 ### Password Management & Security
 - Passwords are **never** stored in plain text files or written to logs.
