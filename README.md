@@ -219,11 +219,16 @@ Waybar and Wofi are third-party projects and are subject to their own upstream l
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c31f263a-8f6f-40a2-9817-4a8e73d953af" />
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/02da32a6-6989-4d21-9e51-274cef8a4bf1" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/491be5e7-c369-4768-97a3-6ba84e07ac64" />
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/6204a553-ff3f-4c47-b261-44ed27b6bece" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/18b553dd-391b-415d-8d82-2c0f2e7484ca" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/69837d82-2931-4afa-bb09-e208227b9e4e" />
 
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/4978039b-1449-4684-a32f-e273d5cd70fa" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/bffe9a57-a082-4f27-a464-aa5f6e01d4c0" />
+
 
 
 
