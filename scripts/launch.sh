@@ -12,9 +12,9 @@ pkill -x waybar 2>/dev/null || true
 sleep 0.2
 
 if [ -f "$CONFIG_DIR/config.jsonc" ]; then
-    setsid -f waybar -c "$CONFIG_DIR/config.jsonc" -s "$CONFIG_DIR/style.css" >/dev/null 2>&1
+    nohup waybar -c "$CONFIG_DIR/config.jsonc" -s "$CONFIG_DIR/style.css" >/dev/null 2>&1 &
 else
     DIR="$(dirname "$(readlink -f "$0")")"
-    setsid -f waybar -c "$DIR/../waybar/config.jsonc" -s "$DIR/../waybar/style.css" >/dev/null 2>&1
+    nohup waybar -c "$DIR/../waybar/config.jsonc" -s "$DIR/../waybar/style.css" >/dev/null 2>&1 &
 fi
 
