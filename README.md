@@ -4,7 +4,7 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 
 ![GitHub License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/40acf46e-eb59-4e5b-884b-cddc4df829fa" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/6f6806d4-0113-46c4-ac58-3bc407984482" />
 
 
 ## Features
