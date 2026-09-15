@@ -39,7 +39,8 @@ window {
 }
 
 .bt-window {
-    background-color: rgba(18, 21, 28, 0.98);
+    background-color: #12151c;
+    background: #12151c;
     border: 1px solid #2b3240;
     border-radius: 16px;
     padding: 18px 20px;
@@ -101,31 +102,40 @@ window {
     color: #ffffff;
 }
 
-/* Switch */
-switch {
-    background-color: #1e2430;
-    border: 1px solid #333d4f;
+/* Bluetooth Switch */
+switch,
+switch trough {
+    background-color: #1e252f;
+    border: 1px solid #3a4758;
     border-radius: 16px;
     min-width: 46px;
     min-height: 24px;
     padding: 2px;
+    color: transparent;
+    font-size: 0px;
+    text-shadow: none;
+    outline: none;
+    box-shadow: none;
 }
 
-switch:checked {
-    background-color: #2b3547;
-    border-color: #4a576e;
+switch:checked,
+switch:checked trough {
+    background-color: #384656;
+    border-color: #4f6176;
 }
 
 switch slider {
-    background-color: #e2e8f0;
+    background-color: #e2d9c8;
     border-radius: 50%;
     min-width: 20px;
     min-height: 20px;
     margin: 1px;
+    border: none;
+    box-shadow: none;
 }
 
 switch:checked slider {
-    background-color: #ffffff;
+    background-color: #e2d9c8;
 }
 
 /* Stats Grid */
@@ -372,9 +382,38 @@ class BluetoothControlCenter(Gtk.Window):
         GLib.timeout_add(4000, self.poll_devices)
 
     def on_window_draw(self, widget, cr):
+        # 1. Clear fullscreen backdrop to transparent
         cr.set_source_rgba(0, 0, 0, 0)
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.paint()
+
+        # 2. Paint 100% solid opaque card with Cairo
+        if hasattr(self, 'card'):
+            alloc = self.card.get_allocation()
+            if alloc.width > 1 and alloc.height > 1:
+                cr.set_operator(cairo.OPERATOR_OVER)
+                radius = 16.0
+                x = float(alloc.x)
+                y = float(alloc.y)
+                w = float(alloc.width)
+                h = float(alloc.height)
+
+                cr.new_sub_path()
+                cr.arc(x + w - radius, y + radius, radius, -math.pi / 2, 0)
+                cr.arc(x + w - radius, y + h - radius, radius, 0, math.pi / 2)
+                cr.arc(x + radius, y + h - radius, radius, math.pi / 2, math.pi)
+                cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+                cr.close_path()
+
+                # Solid dark card background #12151c
+                cr.set_source_rgb(18 / 255.0, 21 / 255.0, 28 / 255.0)
+                cr.fill_preserve()
+
+                # Border #2b3240
+                cr.set_source_rgb(43 / 255.0, 50 / 255.0, 64 / 255.0)
+                cr.set_line_width(1.0)
+                cr.stroke()
+
         return False
 
     def on_backdrop_clicked(self, widget, event):

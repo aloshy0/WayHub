@@ -39,7 +39,8 @@ window {
 }
 
 .bright-window {
-    background-color: rgba(27, 34, 42, 0.98);
+    background-color: #1b222a;
+    background: #1b222a;
     border: 1px solid #334050;
     border-radius: 16px;
     padding: 18px 20px;
@@ -73,7 +74,8 @@ window {
 }
 
 /* Switches */
-switch {
+switch,
+switch trough {
     background-color: #1e252f;
     border: 1px solid #3a4758;
     border-radius: 16px;
@@ -84,9 +86,11 @@ switch {
     font-size: 0px;
     text-shadow: none;
     outline: none;
+    box-shadow: none;
 }
 
-switch:checked {
+switch:checked,
+switch:checked trough {
     background-color: #384656;
     border-color: #4f6176;
 }
@@ -97,6 +101,8 @@ switch slider {
     min-width: 20px;
     min-height: 20px;
     margin: 1px;
+    border: none;
+    box-shadow: none;
 }
 
 switch:checked slider {
@@ -220,9 +226,38 @@ class BrightnessControlCenter(Gtk.Window):
         GLib.timeout_add(2000, self.refresh_state)
 
     def on_window_draw(self, widget, cr):
+        # 1. Clear fullscreen backdrop to transparent
         cr.set_source_rgba(0, 0, 0, 0)
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.paint()
+
+        # 2. Paint 100% solid opaque card with Cairo
+        if hasattr(self, 'card'):
+            alloc = self.card.get_allocation()
+            if alloc.width > 1 and alloc.height > 1:
+                cr.set_operator(cairo.OPERATOR_OVER)
+                radius = 16.0
+                x = float(alloc.x)
+                y = float(alloc.y)
+                w = float(alloc.width)
+                h = float(alloc.height)
+
+                cr.new_sub_path()
+                cr.arc(x + w - radius, y + radius, radius, -math.pi / 2, 0)
+                cr.arc(x + w - radius, y + h - radius, radius, 0, math.pi / 2)
+                cr.arc(x + radius, y + h - radius, radius, math.pi / 2, math.pi)
+                cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+                cr.close_path()
+
+                # Solid dark card background #1b222a
+                cr.set_source_rgb(27 / 255.0, 34 / 255.0, 42 / 255.0)
+                cr.fill_preserve()
+
+                # Border #334050
+                cr.set_source_rgb(51 / 255.0, 64 / 255.0, 80 / 255.0)
+                cr.set_line_width(1.0)
+                cr.stroke()
+
         return False
 
     def on_backdrop_clicked(self, widget, event):

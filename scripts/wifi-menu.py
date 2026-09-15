@@ -40,7 +40,8 @@ window {
 }
 
 .wifi-window {
-    background-color: rgba(18, 21, 28, 0.98);
+    background-color: #12151c;
+    background: #12151c;
     border: 1px solid #2b3240;
     border-radius: 16px;
     padding: 18px 20px;
@@ -103,30 +104,39 @@ window {
 }
 
 /* Wi-Fi Switch */
-switch {
-    background-color: #1e2430;
-    border: 1px solid #333d4f;
+switch,
+switch trough {
+    background-color: #1e252f;
+    border: 1px solid #3a4758;
     border-radius: 16px;
     min-width: 46px;
     min-height: 24px;
     padding: 2px;
+    color: transparent;
+    font-size: 0px;
+    text-shadow: none;
+    outline: none;
+    box-shadow: none;
 }
 
-switch:checked {
-    background-color: #2b3547;
-    border-color: #4a576e;
+switch:checked,
+switch:checked trough {
+    background-color: #384656;
+    border-color: #4f6176;
 }
 
 switch slider {
-    background-color: #e2e8f0;
+    background-color: #e2d9c8;
     border-radius: 50%;
     min-width: 20px;
     min-height: 20px;
     margin: 1px;
+    border: none;
+    box-shadow: none;
 }
 
 switch:checked slider {
-    background-color: #ffffff;
+    background-color: #e2d9c8;
 }
 
 /* Stats Grid */
@@ -772,9 +782,38 @@ class WifiControlCenter(Gtk.Window):
         GLib.timeout_add(10000, self.scan_networks)
 
     def on_window_draw(self, widget, cr):
+        # 1. Clear fullscreen backdrop to transparent
         cr.set_source_rgba(0, 0, 0, 0)
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.paint()
+
+        # 2. Paint 100% solid opaque card with Cairo
+        if hasattr(self, 'card'):
+            alloc = self.card.get_allocation()
+            if alloc.width > 1 and alloc.height > 1:
+                cr.set_operator(cairo.OPERATOR_OVER)
+                radius = 16.0
+                x = float(alloc.x)
+                y = float(alloc.y)
+                w = float(alloc.width)
+                h = float(alloc.height)
+
+                cr.new_sub_path()
+                cr.arc(x + w - radius, y + radius, radius, -math.pi / 2, 0)
+                cr.arc(x + w - radius, y + h - radius, radius, 0, math.pi / 2)
+                cr.arc(x + radius, y + h - radius, radius, math.pi / 2, math.pi)
+                cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+                cr.close_path()
+
+                # Solid dark card background #12151c
+                cr.set_source_rgb(18 / 255.0, 21 / 255.0, 28 / 255.0)
+                cr.fill_preserve()
+
+                # Border #2b3240
+                cr.set_source_rgb(43 / 255.0, 50 / 255.0, 64 / 255.0)
+                cr.set_line_width(1.0)
+                cr.stroke()
+
         return False
 
     def on_backdrop_clicked(self, widget, event):
@@ -786,13 +825,9 @@ class WifiControlCenter(Gtk.Window):
 
     def find_wifi_device(self):
         try:
-            out = subprocess.check_output(
-                ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"], text=True
-            )
-            for line in out.strip().splitlines():
-                parts = line.split(":")
-                if len(parts) >= 2 and parts[1] == "wifi":
-                    return parts[0]
+            for iface in os.listdir('/sys/class/net'):
+                if os.path.exists(f'/sys/class/net/{iface}/wireless') or os.path.exists(f'/sys/class/net/{iface}/phy80211'):
+                    return iface
         except Exception:
             pass
         return "wlo1"
@@ -1023,19 +1058,23 @@ class WifiControlCenter(Gtk.Window):
     # State & Polling
     # -------------------------------------------------------------
     def poll_wifi_state(self):
-        try:
-            state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True).strip()
-            was_enabled = self.wifi_enabled
-            self.wifi_enabled = (state == "enabled")
-            self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
-            self.wifi_switch.set_active(self.wifi_enabled)
-            self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
+        def worker():
+            try:
+                state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True).strip()
+                was_enabled = self.wifi_enabled
+                self.wifi_enabled = (state == "enabled")
+                def update_switch():
+                    self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
+                    self.wifi_switch.set_active(self.wifi_enabled)
+                    self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
+                GLib.idle_add(update_switch)
 
-            # If enabled state changed externally, trigger scan
-            if not was_enabled and self.wifi_enabled:
-                self.scan_networks(rescan=True)
-        except Exception:
-            pass
+                # If enabled state changed externally, trigger scan
+                if not was_enabled and self.wifi_enabled:
+                    self.scan_networks(rescan=True)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
 
     def on_switch_toggled(self, switch, state):
         self.wifi_enabled = state
@@ -1118,7 +1157,10 @@ class WifiControlCenter(Gtk.Window):
         except Exception:
             pass
 
-        # Ping
+        # Immediately update IP and Gateway on UI
+        GLib.idle_add(lambda: (self.v_ip.set_text(ip_addr), self.v_gw.set_text(gateway)))
+
+        # Ping target asynchronously in background
         ping_str = "---"
         loss_str = "0%"
         target = gateway if gateway != "---" else "1.1.1.1"
@@ -1135,7 +1177,7 @@ class WifiControlCenter(Gtk.Window):
         except Exception:
             loss_str = "100%" if ip_addr != "Disconnected" else "---"
 
-        GLib.idle_add(self._update_network_labels, ip_addr, gateway, ping_str, loss_str)
+        GLib.idle_add(lambda: (self.v_ping.set_text(ping_str), self.v_loss.set_text(loss_str)))
 
     def _update_network_labels(self, ip_addr, gateway, ping_str, loss_str):
         self.v_ip.set_text(ip_addr)
@@ -1166,10 +1208,8 @@ class WifiControlCenter(Gtk.Window):
 
         def worker():
             self._do_scan_parse()
-            if rescan or not hasattr(self, '_initial_scanned'):
-                self._initial_scanned = True
+            if rescan:
                 subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-                time.sleep(1.2)
                 self._do_scan_parse()
 
         threading.Thread(target=worker, daemon=True).start()
