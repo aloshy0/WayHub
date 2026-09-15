@@ -14,5 +14,5 @@ if ! pgrep -x waybar >/dev/null 2>&1; then
         setsid -f "$(dirname "$(readlink -f "$0")")/launch.sh" >/dev/null 2>&1
     fi
 else
-    killall -SIGUSR1 waybar 2>/dev/null
+    pkill -SIGUSR1 -x waybar 2>/dev/null || killall -SIGUSR1 waybar 2>/dev/null
 fi

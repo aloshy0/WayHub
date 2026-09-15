@@ -30,7 +30,7 @@ for i in "${!dependencies[@]}"; do
     fi
 done
 
-# Check for Python DBus and GObject dependencies if python3 is available
+# Check for Python DBus, GObject, and Layer Shell dependencies if python3 is available
 if command -v python3 >/dev/null 2>&1; then
     if ! python3 -c "import dbus" >/dev/null 2>&1; then
         missing_deps+=("python-dbus")
@@ -39,6 +39,10 @@ if command -v python3 >/dev/null 2>&1; then
     if ! python3 -c "import gi" >/dev/null 2>&1; then
         missing_deps+=("python-gobject")
         missing_pkgs+=("python-gobject")
+    fi
+    if ! python3 -c "import gi; gi.require_version('GtkLayerShell', '0.1'); from gi.repository import GtkLayerShell" >/dev/null 2>&1; then
+        missing_deps+=("gtk-layer-shell")
+        missing_pkgs+=("gtk-layer-shell")
     fi
 fi
 
@@ -110,7 +114,9 @@ safe_install "waybar/style-autohide.css" "$HOME/.config/waybar/style-autohide.cs
 # 3. Install scripts
 echo -e "${YELLOW}Installing helper scripts...${NC}"
 safe_install "scripts/wifi-menu.sh" "$HOME/.config/waybar/wifi-menu.sh"
+safe_install "scripts/wifi-menu.py" "$HOME/.config/waybar/wifi-menu.py"
 safe_install "scripts/bluetooth-menu.sh" "$HOME/.config/waybar/bluetooth-menu.sh"
+safe_install "scripts/bluetooth-menu.py" "$HOME/.config/waybar/bluetooth-menu.py"
 safe_install "scripts/bt-agent.py" "$HOME/.config/waybar/bt-agent.py"
 safe_install "scripts/battery.py" "$HOME/.config/waybar/battery.py"
 safe_install "scripts/power-profile-toggle.sh" "$HOME/.config/waybar/power-profile-toggle.sh"
@@ -119,7 +125,9 @@ safe_install "scripts/toggle-visibility.sh" "$HOME/.config/waybar/toggle-visibil
 safe_install "scripts/launch.sh" "$HOME/.config/waybar/launch.sh"
 safe_install "scripts/autohide-daemon.py" "$HOME/.config/waybar/autohide-daemon.py"
 chmod +x "$HOME/.config/waybar/wifi-menu.sh"
+chmod +x "$HOME/.config/waybar/wifi-menu.py"
 chmod +x "$HOME/.config/waybar/bluetooth-menu.sh"
+chmod +x "$HOME/.config/waybar/bluetooth-menu.py"
 chmod +x "$HOME/.config/waybar/bt-agent.py"
 chmod +x "$HOME/.config/waybar/battery.py"
 chmod +x "$HOME/.config/waybar/power-profile-toggle.sh"

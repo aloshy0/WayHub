@@ -9,22 +9,23 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 
 ## Features
 
-### 󰤨 Wi-Fi Menu (`wifi-menu.sh`)
-- **Interactive State**: Toggle Wi-Fi power (Turn On/Off) directly from the menu.
-- **Connection Isolation**: Shows currently connected Wi-Fi network at the top.
-- **Polished Sorting**: Lists available networks sorted by signal strength.
-- **De-cluttered Interface**: Saved networks are grouped into a sub-menu to keep the main list clean.
-- **Saved Connection Manager**: Connect, Show Password, Edit Password, and Forget Network.
-- **Open Networks Support**: Connects to open networks instantly without password prompts.
-- **Robust Parsing**: Built using safe Bash associative mapping, supporting SSIDs with spaces, colons, or special characters.
+### 󰤨 Wi-Fi Control Center (`wifi-menu.py` & `wifi-menu.sh`)
+- **Modern GTK3 & Layer Shell Interface**: Sleek, glassmorphic dark-mode popup anchored directly beneath the Waybar Wi-Fi module.
+- **Live Network Statistics**: Real-time traffic monitoring (`Receiving` / `Sending` KB/s & MB/s), cumulative data transferred (`Downloaded` / `Uploaded`), `Ping` latency, `Packet Loss`, `IP Address`, and `Gateway`.
+- **DNS Provider Switching**: 1-click toggling between `DHCP`, `Cloudflare` (1.1.1.1), `Google` (8.8.8.8), and `Custom` DNS providers with automatic NetworkManager application.
+- **Integrated Speed Test**: On-demand network speed & throughput benchmark with live status feedback.
+- **Wi-Fi QR Code Sharing**: Generate a scannable mobile QR code with SSID and security password in one click.
+- **Power Switch & Single-Instance Toggle**: Toggle Wi-Fi radio on/off and smoothly toggle the menu open/closed from Waybar.
+- **Known & Nearby Networks**: Manage current connections (Disconnect, View Password, Forget) and easily connect to nearby SSIDs with inline password entry.
 
-### 󰂯 Bluetooth Menu (`bluetooth-menu.sh`)
-- **Interactive Power**: Turn Bluetooth on/off from the menu.
-- **Fast Load**: Instant menu loading using known/cached devices (no startup scan delay).
-- **Asynchronous Scan**: A "Scan for Devices" utility runs an active scan in the background for 5 seconds and notifies you via `notify-send`.
-- **Discoverability Control**: Toggle the computer's discoverability state directly.
-- **Device Options Sub-menu**: Connect, Disconnect, Trust, Untrust, Pair (with agent support), and Remove/Forget.
-- **Process Cleanup**: Active background scans are safely cleaned up on exit using Bash traps.
+### 󰂯 Bluetooth Control Center (`bluetooth-menu.py` & `bluetooth-menu.sh`)
+- **Matching Modern GTK3 & Layer Shell Design**: Consistent dark-mode popup interface anchored right under the Waybar Bluetooth module.
+- **Live Controller & Device Metrics**: Real-time stats for adapter state, discoverability, pairable mode, device address, host alias, and active connection counts.
+- **Controller Modes & Quick Actions**: 1-click toggling for `Discoverable`, `Pairable`, active `Scan (8s)`, and `Auto-Agent` listener.
+- **Paired Device Cards**: Visual cards with contextual device icons (headsets, mice, keyboards, phones), connection status, and real-time battery percentages (`• 80% 󰁹`).
+- **Device Management**: Click any device to connect/disconnect, trust/untrust, pair, or forget.
+- **Available Devices Scanner**: Discovers nearby Bluetooth devices in range with a flat `󰑐` rescan button and one-click pairing.
+- **Power Switch & Single-Instance Toggle**: Toggle Bluetooth radio power and toggle the popup open/closed smoothly from Waybar.
 
 ### 󱈑 Battery & Power Profiles (`battery.py` & `power-profile-toggle.sh`)
 - **Dynamic Battery State**: Accurately tracks charge percentage, charging status, and battery health via UPower/sysfs.

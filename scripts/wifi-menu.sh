@@ -1,19 +1,14 @@
 #!/usr/bin/env bash
 
-# Wi-Fi Menu using Wofi and nmcli
-# Designed for clean integration with Waybar
+# Check if Python GTK3 Wi-Fi popup is available
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/wifi-menu.py" ] && command -v python3 >/dev/null 2>&1; then
+    exec python3 "$SCRIPT_DIR/wifi-menu.py" "$@"
+elif [ -f "$HOME/.config/waybar/wifi-menu.py" ] && command -v python3 >/dev/null 2>&1; then
+    exec python3 "$HOME/.config/waybar/wifi-menu.py" "$@"
+fi
 
-set -u
-
-# Notification helper using Dunst stack tagging for clean replacement
-wifi_notify() {
-    local text="$1"
-    local urgency="${2:-normal}" # normal, low, critical
-    local timeout="${3:-3500}"
-    local icon="network-wireless"
-    [ "$urgency" = "critical" ] && icon="network-wireless-error"
-    notify-send -a "Wi-Fi" -u "$urgency" -i "$icon" -t "$timeout" -h string:x-dunst-stack-tag:wifi "Wi-Fi" "$text"
-}
+# Fallback Wi-Fi Menu using Wofi and nmcli
 
 # Check if NetworkManager is running
 if ! nmcli general status >/dev/null 2>&1; then

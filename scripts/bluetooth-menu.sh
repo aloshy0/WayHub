@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-
-# Bluetooth Menu using Wofi and bluetoothctl
-# Designed for clean integration with Waybar
-
 set -u
+
+# Check if Python GTK3 Bluetooth popup is available
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/bluetooth-menu.py" ] && command -v python3 >/dev/null 2>&1; then
+    exec python3 "$SCRIPT_DIR/bluetooth-menu.py" "$@"
+elif [ -f "$HOME/.config/waybar/bluetooth-menu.py" ] && command -v python3 >/dev/null 2>&1; then
+    exec python3 "$HOME/.config/waybar/bluetooth-menu.py" "$@"
+fi
+
+# Fallback Bluetooth Menu using Wofi and bluetoothctl
 
 # Check if bluetoothctl is available
 if ! command -v bluetoothctl >/dev/null 2>&1; then
