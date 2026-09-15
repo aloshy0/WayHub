@@ -107,9 +107,10 @@
       "󰃟",
       "󰃠"
     ],
+    "on-click": "~/.config/waybar/brightness-menu.sh",
     "on-scroll-up": "brightnessctl -e4 -n2 set 5%+",
     "on-scroll-down": "brightnessctl -e4 -n2 set 5%-",
-    "tooltip-format": "Brightness: {percent}%"
+    "tooltip-format": "Brightness: {percent}%\nClick: brightness control"
   },
   
   "network": {
@@ -151,8 +152,10 @@
       "headphone": "",
       "headset": ""
     },
-    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-    "tooltip-format": "{volume}%"
+    "on-click": "~/.config/waybar/audio-menu.sh",
+    "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "on-click-middle": "pavucontrol",
+    "tooltip-format": "Audio: {volume}%\nClick: control center\nRight-click: mute toggle"
   },
 
   "custom/battery": {

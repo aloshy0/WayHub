@@ -12,11 +12,13 @@ import threading
 import subprocess
 import time
 
+import cairo
+
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_version('GtkLayerShell', '0.1')
-from gi.repository import Gtk, Gdk, GLib, GtkLayerShell, cairo
+from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 SOCKET_PATH = f"/tmp/waybar_bluetooth_menu_{os.getuid()}.sock"
 
