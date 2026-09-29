@@ -272,6 +272,112 @@ switch:checked slider {
     color: #ffffff;
 }
 
+/* Connect & Action Buttons (Blue for paired, Red for new / pair, Danger for disconnect) */
+.btn-connect-blue {
+    background-color: #1e40af;
+    background: #1e40af;
+    border: 1px solid #3b82f6;
+    border-radius: 6px;
+    padding: 3px 12px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    transition: all 150ms ease;
+}
+
+.btn-connect-blue:hover {
+    background-color: #2563eb;
+    background: #2563eb;
+    border-color: #60a5fa;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.btn-connect-blue:active {
+    background-color: #1d4ed8;
+    background: #1d4ed8;
+}
+
+.btn-connect-blue:disabled {
+    background-color: #1e3a8a;
+    background: #1e3a8a;
+    border-color: #3b82f6;
+    color: #93c5fd;
+    opacity: 0.9;
+}
+
+.btn-connect-red {
+    background-color: #991b1b;
+    background: #991b1b;
+    border: 1px solid #ef4444;
+    border-radius: 6px;
+    padding: 3px 12px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    transition: all 150ms ease;
+}
+
+.btn-connect-red:hover {
+    background-color: #dc2626;
+    background: #dc2626;
+    border-color: #f87171;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+.btn-connect-red:active {
+    background-color: #7f1d1d;
+    background: #7f1d1d;
+}
+
+.btn-connect-red:disabled {
+    background-color: #7f1d1d;
+    background: #7f1d1d;
+    border-color: #ef4444;
+    color: #fca5a5;
+    opacity: 0.9;
+}
+
+.btn-disconnect-sm {
+    background-color: #3b1e24;
+    background: #3b1e24;
+    border: 1px solid #5a2730;
+    border-radius: 6px;
+    padding: 3px 10px;
+    color: #f87171;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    transition: all 150ms ease;
+}
+
+.btn-disconnect-sm:hover {
+    background-color: #4c222b;
+    background: #4c222b;
+    border-color: #782e3c;
+    color: #fca5a5;
+}
+
+.btn-icon-sm {
+    background-color: #1a202c;
+    background: #1a202c;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #a0aec0;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 150ms ease;
+}
+
+.btn-icon-sm:hover {
+    background-color: #2d3748;
+    color: #ffffff;
+}
+
 /* Overlay Dialog */
 .card-overlay {
     background-color: #181c25;
@@ -368,7 +474,9 @@ class BluetoothControlCenter(Gtk.Window):
         self.controller_mac = ""
         self.controller_alias = ""
         self.primary_connected = ""
+        self.primary_connected_mac = ""
         self.scanning_active = False
+        self.connecting_macs = set()
 
         self.init_ui()
         self.apply_css()
@@ -489,6 +597,16 @@ class BluetoothControlCenter(Gtk.Window):
         actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         actions_box.set_valign(Gtk.Align.CENTER)
         header_box.pack_end(actions_box, False, False, 0)
+
+        # Header Disconnect Button for Active Primary Device
+        self.btn_header_disc = Gtk.Button(label="Disconnect")
+        self.btn_header_disc.get_style_context().add_class("action-btn")
+        self.btn_header_disc.get_style_context().add_class("danger")
+        self.btn_header_disc.set_valign(Gtk.Align.CENTER)
+        self.btn_header_disc.set_no_show_all(True)
+        self.btn_header_disc.set_visible(False)
+        self.btn_header_disc.connect("clicked", lambda w: self.disconnect_primary_device())
+        actions_box.pack_start(self.btn_header_disc, False, False, 0)
 
         # Discoverable Quick Button
         self.disc_btn = Gtk.Button(label="󰂰")
@@ -832,16 +950,24 @@ class BluetoothControlCenter(Gtk.Window):
         self.v_conn.set_text(f"{connected_count} Device{'s' if connected_count != 1 else ''}")
         self.v_paired.set_text(f"{len(paired_devices)} Device{'s' if len(paired_devices) != 1 else ''}")
 
-        # Update Primary connected title
+        # Update Primary connected title and header disconnect button
         connected_devs = [d for d in paired_devices if d.get("connected")]
         if connected_devs:
             self.primary_connected = connected_devs[0]["name"]
+            self.primary_connected_mac = connected_devs[0]["mac"]
             self.lbl_title.set_text(self.primary_connected)
             self.header_icon.set_text("󰂱")
+            self.btn_header_disc.set_visible(True)
         elif self.bt_powered:
             self.primary_connected = ""
+            self.primary_connected_mac = ""
             self.lbl_title.set_text("Bluetooth Ready")
             self.header_icon.set_text("")
+            self.btn_header_disc.set_visible(False)
+        else:
+            self.primary_connected = ""
+            self.primary_connected_mac = ""
+            self.btn_header_disc.set_visible(False)
 
         # 1. Render Paired Devices
         for child in self.paired_container.get_children():
@@ -875,9 +1001,12 @@ class BluetoothControlCenter(Gtk.Window):
                 info_box.set_valign(Gtk.Align.CENTER)
                 lbl_name = Gtk.Label(label=dev["name"], xalign=0)
                 lbl_name.get_style_context().add_class("dev-name")
-                
+
                 status_parts = []
-                if dev.get("connected"):
+                is_connected = dev.get("connected", False)
+                is_connecting = dev["mac"] in self.connecting_macs
+
+                if is_connected:
                     status_parts.append("Connected")
                 else:
                     status_parts.append("Paired")
@@ -890,12 +1019,34 @@ class BluetoothControlCenter(Gtk.Window):
                 info_box.pack_start(lbl_stat, False, False, 0)
                 card_box.pack_start(info_box, True, True, 0)
 
-                # Status Badge
-                if dev.get("connected"):
+                # Connect / Disconnect Action Button
+                if is_connected:
+                    btn_disc = Gtk.Button(label="Disconnect")
+                    btn_disc.get_style_context().add_class("btn-disconnect-sm")
+                    btn_disc.set_valign(Gtk.Align.CENTER)
+                    btn_disc.connect("clicked", lambda w, d=dev, b=btn_disc: self.trigger_device_disconnect(d, b))
+                    card_box.pack_end(btn_disc, False, False, 0)
+
                     badge = Gtk.Label(label="")
                     badge.get_style_context().add_class("dev-badge")
                     badge.set_valign(Gtk.Align.CENTER)
-                    card_box.pack_end(badge, False, False, 0)
+                    card_box.pack_end(badge, False, False, 4)
+                else:
+                    btn_conn = Gtk.Button(label="Connecting..." if is_connecting else "Connect")
+                    btn_conn.get_style_context().add_class("btn-connect-blue")
+                    if is_connecting:
+                        btn_conn.set_sensitive(False)
+                    btn_conn.set_valign(Gtk.Align.CENTER)
+                    btn_conn.connect("clicked", lambda w, d=dev, b=btn_conn: self.trigger_device_connect(d, b))
+                    card_box.pack_end(btn_conn, False, False, 0)
+
+                # Options / Forget Button
+                btn_forget = Gtk.Button(label="󰆴")
+                btn_forget.get_style_context().add_class("btn-icon-sm")
+                btn_forget.set_tooltip_text("Forget device")
+                btn_forget.set_valign(Gtk.Align.CENTER)
+                btn_forget.connect("clicked", lambda w, d=dev: self.forget_device(d))
+                card_box.pack_end(btn_forget, False, False, 4)
 
                 card.connect("button-press-event", self.on_device_card_clicked, dev)
                 self.paired_container.pack_start(card, False, False, 0)
@@ -947,11 +1098,137 @@ class BluetoothControlCenter(Gtk.Window):
                 name_lbl.set_valign(Gtk.Align.CENTER)
                 row_box.pack_start(name_lbl, True, True, 0)
 
+                # Pair & Connect Button
+                is_connecting = dev["mac"] in self.connecting_macs
+                btn_pair = Gtk.Button(label="Pairing..." if is_connecting else "Pair")
+                btn_pair.get_style_context().add_class("btn-connect-red")
+                if is_connecting:
+                    btn_pair.set_sensitive(False)
+                btn_pair.set_valign(Gtk.Align.CENTER)
+                btn_pair.connect("clicked", lambda w, d=dev, b=btn_pair: self.trigger_device_pair(d, b))
+                row_box.pack_end(btn_pair, False, False, 0)
+
                 row.connect("button-press-event", self.on_available_row_clicked, dev)
                 self.avail_container.pack_start(row, False, False, 0)
 
         self.scroll_win.show_all()
         self.avail_container.show_all()
+
+    # -------------------------------------------------------------
+    # Direct Connect / Disconnect / Pair Actions
+    # -------------------------------------------------------------
+    def trigger_device_connect(self, dev, btn=None):
+        mac = dev["mac"]
+        name = dev["name"]
+        self.connecting_macs.add(mac)
+        if btn:
+            btn.set_label("Connecting...")
+            btn.set_sensitive(False)
+
+        def worker():
+            try:
+                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Connecting", f"Connecting to {name}..."], check=False)
+                out = subprocess.check_output(["bluetoothctl", "--timeout", "12", "connect", mac], text=True, stderr=subprocess.STDOUT)
+                info = subprocess.check_output(["bluetoothctl", "info", mac], text=True, stderr=subprocess.DEVNULL)
+                if "Connected: yes" in info:
+                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Connected", f"Connected to {name}"], check=False)
+                else:
+                    reason = "Connection failed"
+                    for l in out.splitlines():
+                        if any(k in l.lower() for k in ["fail", "error", "not available", "refuse", "timeout"]):
+                            reason = l.strip()
+                            break
+                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "dialog-error", "Connection Failed", f"Could not connect to {name}: {reason}"], check=False)
+            except Exception as e:
+                print(f"BT Connect error: {e}")
+            finally:
+                self.connecting_macs.discard(mac)
+                GLib.idle_add(self.poll_devices)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def trigger_device_disconnect(self, dev, btn=None):
+        mac = dev["mac"]
+        name = dev["name"]
+        if btn:
+            btn.set_label("Disconnecting...")
+            btn.set_sensitive(False)
+
+        def worker():
+            try:
+                subprocess.run(["bluetoothctl", "--timeout", "6", "disconnect", mac], check=False)
+                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Disconnected", f"Disconnected from {name}"], check=False)
+            except Exception as e:
+                print(f"BT Disconnect error: {e}")
+            finally:
+                GLib.idle_add(self.poll_devices)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def trigger_device_pair(self, dev, btn=None):
+        mac = dev["mac"]
+        name = dev["name"]
+        self.connecting_macs.add(mac)
+        if btn:
+            btn.set_label("Pairing...")
+            btn.set_sensitive(False)
+
+        def worker():
+            try:
+                # Launch bt-agent if available
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                agent_path = os.path.join(script_dir, "bt-agent.py")
+                if not os.path.exists(agent_path):
+                    agent_path = os.path.expanduser("~/.config/waybar/bt-agent.py")
+                if os.path.exists(agent_path):
+                    subprocess.Popen(["python3", agent_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(0.3)
+
+                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Pairing", f"Pairing with {name}..."], check=False)
+                subprocess.run(["bluetoothctl", "trust", mac], check=False)
+                subprocess.run(["bluetoothctl", "--timeout", "15", "pair", mac], check=False)
+                subprocess.run(["bluetoothctl", "--timeout", "10", "connect", mac], check=False)
+
+                info = subprocess.check_output(["bluetoothctl", "info", mac], text=True, stderr=subprocess.DEVNULL)
+                if "Connected: yes" in info or "Paired: yes" in info:
+                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Paired", f"Successfully paired with {name}"], check=False)
+                else:
+                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "dialog-error", "Pairing Failed", f"Could not pair with {name}"], check=False)
+            except Exception as e:
+                print(f"BT Pair error: {e}")
+            finally:
+                self.connecting_macs.discard(mac)
+                GLib.idle_add(self.poll_devices)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def forget_device(self, dev):
+        mac = dev["mac"]
+        name = dev["name"]
+        def worker():
+            try:
+                subprocess.run(["bluetoothctl", "remove", mac], check=False)
+                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Device Removed", f"Forgot '{name}'"], check=False)
+            except Exception as e:
+                print(f"BT Forget error: {e}")
+            finally:
+                GLib.idle_add(self.poll_devices)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def disconnect_primary_device(self):
+        if not self.primary_connected_mac:
+            return
+        mac = self.primary_connected_mac
+        name = self.primary_connected
+        def worker():
+            try:
+                subprocess.run(["bluetoothctl", "--timeout", "6", "disconnect", mac], check=False)
+                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Disconnected", f"Disconnected from {name}"], check=False)
+            except Exception as e:
+                print(f"BT Disconnect error: {e}")
+            finally:
+                GLib.idle_add(self.poll_devices)
+        threading.Thread(target=worker, daemon=True).start()
 
     # -------------------------------------------------------------
     # Active Bluetooth Scan
@@ -1006,23 +1283,14 @@ class BluetoothControlCenter(Gtk.Window):
 
         def do_toggle_connect(w):
             self.clear_overlay()
-            def worker():
-                if is_connected:
-                    subprocess.run(["bluetoothctl", "disconnect", mac], check=False)
-                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Disconnected", f"Disconnected from {name}"], check=False)
-                else:
-                    subprocess.run(["bluetoothctl", "connect", mac], check=False)
-                    subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Connected", f"Connected to {name}"], check=False)
-                GLib.idle_add(self.poll_devices)
-            threading.Thread(target=worker, daemon=True).start()
+            if is_connected:
+                self.trigger_device_disconnect(dev)
+            else:
+                self.trigger_device_connect(dev)
 
         def do_forget(w):
             self.clear_overlay()
-            def worker():
-                subprocess.run(["bluetoothctl", "remove", mac], check=False)
-                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Device Removed", f"Forgot {name}"], check=False)
-                GLib.idle_add(self.poll_devices)
-            threading.Thread(target=worker, daemon=True).start()
+            self.forget_device(dev)
 
         btn_action.connect("clicked", do_toggle_connect)
         btn_forget.connect("clicked", do_forget)
@@ -1060,13 +1328,7 @@ class BluetoothControlCenter(Gtk.Window):
 
         def do_pair(w):
             self.clear_overlay()
-            def worker():
-                subprocess.run(["notify-send", "-a", "Bluetooth", "-i", "bluetooth", "Pairing", f"Pairing with {name}..."], check=False)
-                subprocess.run(["bluetoothctl", "trust", mac], check=False)
-                subprocess.run(["bluetoothctl", "pair", mac], check=False)
-                subprocess.run(["bluetoothctl", "connect", mac], check=False)
-                GLib.idle_add(self.poll_devices)
-            threading.Thread(target=worker, daemon=True).start()
+            self.trigger_device_pair(dev)
 
         btn_pair.connect("clicked", do_pair)
         btn_cancel.connect("clicked", lambda w: self.clear_overlay())
