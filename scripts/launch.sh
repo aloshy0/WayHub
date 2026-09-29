@@ -18,12 +18,12 @@ pkill -x waybar 2>/dev/null || true
 sleep 0.2
 
 if [ "$CURRENT_MODE" = "autohide" ]; then
-    nohup waybar -c "$CONFIG_DIR/config-autohide.jsonc" -s "$CONFIG_DIR/style-autohide.css" >/dev/null 2>&1 &
+    setsid -f waybar -c "$CONFIG_DIR/config-autohide.jsonc" -s "$CONFIG_DIR/style-autohide.css" >/dev/null 2>&1
     DAEMON_SCRIPT="$CONFIG_DIR/autohide-daemon.py"
     if [ -f "$DAEMON_SCRIPT" ]; then
-        nohup python3 "$DAEMON_SCRIPT" >/dev/null 2>&1 &
+        setsid -f python3 "$DAEMON_SCRIPT" >/dev/null 2>&1
     fi
 else
-    nohup waybar -c "$CONFIG_DIR/config.jsonc" -s "$CONFIG_DIR/style.css" >/dev/null 2>&1 &
+    setsid -f waybar -c "$CONFIG_DIR/config.jsonc" -s "$CONFIG_DIR/style.css" >/dev/null 2>&1
 fi
 

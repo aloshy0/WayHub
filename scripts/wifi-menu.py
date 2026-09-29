@@ -282,6 +282,138 @@ switch:checked slider {
     color: #ffffff;
 }
 
+/* Connect Buttons (Blue for previously connected / saved, Red for new / unsaved) */
+.btn-connect-blue {
+    background-color: #1e40af;
+    background: #1e40af;
+    border: 1px solid #3b82f6;
+    border-radius: 6px;
+    padding: 3px 12px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    transition: all 150ms ease;
+}
+
+.btn-connect-blue:hover {
+    background-color: #2563eb;
+    background: #2563eb;
+    border-color: #60a5fa;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.btn-connect-blue:active {
+    background-color: #1d4ed8;
+    background: #1d4ed8;
+}
+
+.btn-connect-blue:disabled {
+    background-color: #1e3a8a;
+    background: #1e3a8a;
+    border-color: #3b82f6;
+    color: #93c5fd;
+    opacity: 0.9;
+}
+
+.btn-connect-red {
+    background-color: #991b1b;
+    background: #991b1b;
+    border: 1px solid #ef4444;
+    border-radius: 6px;
+    padding: 3px 12px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    transition: all 150ms ease;
+}
+
+.btn-connect-red:hover {
+    background-color: #dc2626;
+    background: #dc2626;
+    border-color: #f87171;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+.btn-connect-red:active {
+    background-color: #7f1d1d;
+    background: #7f1d1d;
+}
+
+.btn-connect-red:disabled {
+    background-color: #7f1d1d;
+    background: #7f1d1d;
+    border-color: #ef4444;
+    color: #fca5a5;
+    opacity: 0.9;
+}
+
+.btn-edit {
+    background-color: #1a202c;
+    background: #1a202c;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #a0aec0;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 150ms ease;
+}
+
+.btn-edit:hover {
+    background-color: #2d3748;
+    background: #2d3748;
+    border-color: #4a5568;
+    color: #ffffff;
+}
+
+.btn-edit:active {
+    background-color: #1a202c;
+    background: #1a202c;
+}
+
+/* Wired / Ethernet Card */
+.wired-card {
+    background-color: #161b26;
+    background: #161b26;
+    border: 1px solid #293548;
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    transition: all 150ms ease;
+}
+
+.wired-card:hover {
+    background-color: #1c2331;
+    border-color: #3b4d68;
+}
+
+.wired-icon {
+    font-size: 22px;
+    color: #60a5fa;
+    margin-right: 10px;
+}
+
+.wired-badge {
+    background-color: #1e3a8a;
+    border: 1px solid #3b82f6;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #bfdbfe;
+    letter-spacing: 0.5px;
+}
+
+.wired-detail-box {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #232c3d;
+}
+
 /* Input Fields */
 entry {
     background-color: #181d26;
@@ -768,16 +900,16 @@ class WifiControlCenter(Gtk.Window):
         self.active_bssid = ""
         self.wifi_enabled = True
         self.speedtest_running = False
+        self.connecting_ssids = set()
+        self.start_time = time.time()
 
         self.init_ui()
         self.apply_css()
 
-        # Initial data poll
-        self.poll_wifi_state()
-        self.poll_stats()
-        self.scan_networks()
+        # Immediate fast synchronous initial state load (~25ms)
+        self.fetch_fast_initial_data()
 
-        # Timers
+        # Timers for background updates
         GLib.timeout_add(1500, self.poll_stats)
         GLib.timeout_add(10000, self.scan_networks)
 
@@ -817,7 +949,13 @@ class WifiControlCenter(Gtk.Window):
         return False
 
     def on_backdrop_clicked(self, widget, event):
+        if time.time() - self.start_time < 0.5:
+            return False
+        if not hasattr(self, 'card'):
+            return False
         alloc = self.card.get_allocation()
+        if alloc.width <= 1 or alloc.height <= 1:
+            return False
         if alloc.x <= event.x <= alloc.x + alloc.width and alloc.y <= event.y <= alloc.y + alloc.height:
             return False
         self.close()
@@ -898,6 +1036,16 @@ class WifiControlCenter(Gtk.Window):
         actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         actions_box.set_valign(Gtk.Align.CENTER)
         header_box.pack_end(actions_box, False, False, 0)
+
+        # Active Wi-Fi Disconnect Button
+        self.btn_active_disc = Gtk.Button(label="Disconnect")
+        self.btn_active_disc.get_style_context().add_class("action-btn")
+        self.btn_active_disc.get_style_context().add_class("danger")
+        self.btn_active_disc.set_valign(Gtk.Align.CENTER)
+        self.btn_active_disc.set_no_show_all(True)
+        self.btn_active_disc.set_visible(False)
+        self.btn_active_disc.connect("clicked", lambda w: self.disconnect_active_wifi())
+        actions_box.pack_start(self.btn_active_disc, False, False, 0)
 
         # QR Code Button
         self.qr_btn = Gtk.Button(label="󰐲")
@@ -1021,17 +1169,21 @@ class WifiControlCenter(Gtk.Window):
         speed_header.pack_end(self.speed_btn, False, False, 0)
         main_box.pack_start(speed_header, False, False, 0)
 
-        # 5. Known Networks Section
-        self.known_title = Gtk.Label(label="KNOWN NETWORKS", xalign=0)
-        self.known_title.get_style_context().add_class("section-title")
-        main_box.pack_start(self.known_title, False, False, 0)
+        # 4.5 Wired Connection Section
+        self.wired_title = Gtk.Label(label="WIRED CONNECTION", xalign=0)
+        self.wired_title.get_style_context().add_class("section-title")
+        self.wired_title.set_no_show_all(True)
+        self.wired_title.set_visible(False)
+        main_box.pack_start(self.wired_title, False, False, 0)
 
-        self.known_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        main_box.pack_start(self.known_container, False, False, 0)
+        self.wired_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.wired_container.set_no_show_all(True)
+        self.wired_container.set_visible(False)
+        main_box.pack_start(self.wired_container, False, False, 0)
 
-        # 6. Other Networks Section
+        # 5. Available Networks Section
         other_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.other_title = Gtk.Label(label="OTHER NETWORKS", xalign=0)
+        self.other_title = Gtk.Label(label="AVAILABLE NETWORKS", xalign=0)
         self.other_title.get_style_context().add_class("section-title")
         other_header.pack_start(self.other_title, True, True, 0)
 
@@ -1055,12 +1207,50 @@ class WifiControlCenter(Gtk.Window):
         self.scroll_win.add(self.other_container)
 
     # -------------------------------------------------------------
-    # State & Polling
+    # State & Polling (Fast, Latency-Free)
     # -------------------------------------------------------------
+    def fetch_fast_initial_data(self):
+        """Immediately loads cached NM Wi-Fi data & network stats synchronously (<30ms)"""
+        try:
+            state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
+            self.wifi_enabled = (state == "enabled")
+            self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
+            self.wifi_switch.set_active(self.wifi_enabled)
+            self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
+        except Exception:
+            pass
+
+        # 1. Immediate synchronous parse of cached network list
+        self._do_scan_parse(async_render=False)
+
+        # 2. Immediate interface stats
+        self._update_interface_stats()
+
+        # 3. Fast IP and Gateway check
+        try:
+            out_ip = subprocess.check_output(
+                ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
+            )
+            m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
+            if m_ip:
+                self.v_ip.set_text(m_ip.group(1))
+
+            out_gw = subprocess.check_output(
+                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
+            )
+            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
+            if m_gw:
+                self.v_gw.set_text(m_gw.group(1))
+        except Exception:
+            pass
+
+        # 4. Asynchronously check ping in background so ping never delays UI
+        threading.Thread(target=self._async_ping, daemon=True).start()
+
     def poll_wifi_state(self):
         def worker():
             try:
-                state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True).strip()
+                state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
                 was_enabled = self.wifi_enabled
                 self.wifi_enabled = (state == "enabled")
                 def update_switch():
@@ -1069,7 +1259,6 @@ class WifiControlCenter(Gtk.Window):
                     self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
                 GLib.idle_add(update_switch)
 
-                # If enabled state changed externally, trigger scan
                 if not was_enabled and self.wifi_enabled:
                     self.scan_networks(rescan=True)
             except Exception:
@@ -1079,7 +1268,6 @@ class WifiControlCenter(Gtk.Window):
     def on_switch_toggled(self, switch, state):
         self.wifi_enabled = state
         if not state:
-            # Turned off: update UI immediately
             self.active_ssid = ""
             self.ssid_title.set_text("Wi-Fi Disabled")
             self.ssid_subtitle.set_text("NO ACTIVE CONNECTION")
@@ -1090,12 +1278,9 @@ class WifiControlCenter(Gtk.Window):
             cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
             subprocess.run(cmd, check=False)
             if state:
-                # Multi-stage scan after turning radio on to catch devices as adapter warms up
-                time.sleep(1.0)
+                time.sleep(0.8)
                 subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-                time.sleep(1.2)
-                self._do_scan_parse()
-                time.sleep(2.0)
+                time.sleep(1.0)
                 self._do_scan_parse()
             else:
                 self._do_scan_parse()
@@ -1103,8 +1288,7 @@ class WifiControlCenter(Gtk.Window):
         threading.Thread(target=toggle_worker, daemon=True).start()
         return True
 
-    def poll_stats(self):
-        # 1. Update Traffic stats from /proc/net/dev
+    def _update_interface_stats(self):
         try:
             with open("/proc/net/dev", "r") as f:
                 for line in f:
@@ -1112,7 +1296,6 @@ class WifiControlCenter(Gtk.Window):
                         parts = line.split(":")[1].split()
                         rx_bytes = int(parts[0])
                         tx_bytes = int(parts[8])
-                        colls = int(parts[14])
 
                         now = time.time()
                         dt = now - self.prev_time
@@ -1126,14 +1309,14 @@ class WifiControlCenter(Gtk.Window):
                         self.prev_tx = tx_bytes
                         self.prev_time = now
 
-                        # Total download / upload
                         self.v_down.set_text(self.format_bytes(rx_bytes))
                         self.v_up.set_text(self.format_bytes(tx_bytes))
                         break
         except Exception:
             pass
 
-        # 2. Update IP and Gateway
+    def poll_stats(self):
+        self._update_interface_stats()
         threading.Thread(target=self._fetch_network_details, daemon=True).start()
         return True
 
@@ -1157,13 +1340,14 @@ class WifiControlCenter(Gtk.Window):
         except Exception:
             pass
 
-        # Immediately update IP and Gateway on UI
         GLib.idle_add(lambda: (self.v_ip.set_text(ip_addr), self.v_gw.set_text(gateway)))
+        self._async_ping()
 
-        # Ping target asynchronously in background
+    def _async_ping(self):
+        gw = self.v_gw.get_text()
+        target = gw if (gw and gw != "---" and gw != "0.0.0.0") else "1.1.1.1"
         ping_str = "---"
         loss_str = "0%"
-        target = gateway if gateway != "---" else "1.1.1.1"
         try:
             out_ping = subprocess.check_output(
                 ["ping", "-c", "1", "-W", "1", target], text=True, stderr=subprocess.DEVNULL
@@ -1175,15 +1359,9 @@ class WifiControlCenter(Gtk.Window):
             if m_time:
                 ping_str = f"{int(float(m_time.group(1)))} ms"
         except Exception:
-            loss_str = "100%" if ip_addr != "Disconnected" else "---"
+            loss_str = "100%" if self.v_ip.get_text() not in ("Disconnected", "0.0.0.0") else "---"
 
         GLib.idle_add(lambda: (self.v_ping.set_text(ping_str), self.v_loss.set_text(loss_str)))
-
-    def _update_network_labels(self, ip_addr, gateway, ping_str, loss_str):
-        self.v_ip.set_text(ip_addr)
-        self.v_gw.set_text(gateway)
-        self.v_ping.set_text(ping_str)
-        self.v_loss.set_text(loss_str)
 
     def format_rate(self, b_per_sec):
         if b_per_sec < 1024:
@@ -1207,10 +1385,9 @@ class WifiControlCenter(Gtk.Window):
             return True
 
         def worker():
-            self._do_scan_parse()
             if rescan:
                 subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-                self._do_scan_parse()
+            self._do_scan_parse()
 
         threading.Thread(target=worker, daemon=True).start()
         return True
@@ -1219,15 +1396,206 @@ class WifiControlCenter(Gtk.Window):
         self.rescan_btn.set_sensitive(False)
         def worker():
             subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-            time.sleep(1.2)
+            time.sleep(1.0)
             self._do_scan_parse()
             GLib.idle_add(lambda: self.rescan_btn.set_sensitive(True))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _do_scan_parse(self):
+    def _detect_wired_connections(self):
+        wired_list = []
         try:
+            dev_out = subprocess.check_output(
+                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip().splitlines()
+            for line in dev_out:
+                parts = line.split(":")
+                if len(parts) >= 4 and parts[1] == "ethernet" and parts[2] == "connected":
+                    dev_name = parts[0]
+                    conn_name = parts[3]
+                    ip_str = "---"
+                    gw_str = "---"
+                    dns_str = "---"
+                    mac_str = "---"
+                    speed = ""
+                    try:
+                        dev_info = subprocess.check_output(
+                            ["nmcli", "-t", "device", "show", dev_name],
+                            text=True, stderr=subprocess.DEVNULL
+                        ).splitlines()
+                        for l in dev_info:
+                            parts_info = l.split(":", 1)
+                            if len(parts_info) == 2:
+                                k, v = parts_info[0].strip(), parts_info[1].strip()
+                                if k.startswith("IP4.ADDRESS") and ip_str == "---":
+                                    ip_str = v.split("/")[0]
+                                elif k == "IP4.GATEWAY" and v:
+                                    gw_str = v
+                                elif k.startswith("IP4.DNS") and dns_str == "---" and v:
+                                    dns_str = v
+                                elif k == "GENERAL.HWADDR" and v:
+                                    mac_str = v
+                                elif k == "WIRED-PROPERTIES.SPEED" and v and v != "--":
+                                    speed = f"{v} Mb/s"
+                    except Exception:
+                        pass
+
+                    # Fallback to direct ip route if gateway wasn't found in device show
+                    if gw_str == "---":
+                        try:
+                            out_gw = subprocess.check_output(
+                                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
+                            )
+                            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
+                            if m_gw:
+                                gw_str = m_gw.group(1)
+                        except Exception:
+                            pass
+
+                    wired_list.append({
+                        "device": dev_name,
+                        "connection": conn_name,
+                        "ip": ip_str,
+                        "gateway": gw_str,
+                        "dns": dns_str,
+                        "mac": mac_str,
+                        "speed": speed
+                    })
+        except Exception:
+            pass
+        return wired_list
+
+    def _render_wired_connections(self, wired_list):
+        for child in self.wired_container.get_children():
+            self.wired_container.remove(child)
+
+        if not wired_list:
+            self.wired_title.set_visible(False)
+            self.wired_container.set_visible(False)
+            return
+
+        for w in wired_list:
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            card.get_style_context().add_class("wired-card")
+
+            # Top Row: Icon + Title/Sub + Badge + Disconnect Button
+            top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+            icon_lbl = Gtk.Label(label="󰈀")
+            icon_lbl.get_style_context().add_class("wired-icon")
+            icon_lbl.set_valign(Gtk.Align.CENTER)
+            top_row.pack_start(icon_lbl, False, False, 0)
+
+            title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            title_box.set_valign(Gtk.Align.CENTER)
+            conn_lbl = Gtk.Label(label=w["connection"], xalign=0)
+            conn_lbl.get_style_context().add_class("net-ssid")
+            sub_text = f"{w['device']} • Connected"
+            if w.get("speed"):
+                sub_text += f" • {w['speed']}"
+            sub_lbl = Gtk.Label(label=sub_text, xalign=0)
+            sub_lbl.get_style_context().add_class("net-status")
+            title_box.pack_start(conn_lbl, False, False, 0)
+            title_box.pack_start(sub_lbl, False, False, 0)
+            top_row.pack_start(title_box, True, True, 0)
+
+            badge = Gtk.Label(label="ETHERNET")
+            badge.get_style_context().add_class("wired-badge")
+            badge.set_valign(Gtk.Align.CENTER)
+            top_row.pack_end(badge, False, False, 4)
+
+            btn_disc = Gtk.Button(label="Disconnect")
+            btn_disc.get_style_context().add_class("action-btn")
+            btn_disc.get_style_context().add_class("danger")
+            btn_disc.set_valign(Gtk.Align.CENTER)
+            btn_disc.connect("clicked", lambda btn, c=w["connection"], d=w["device"]: self.disconnect_wired(c, d))
+            top_row.pack_end(btn_disc, False, False, 0)
+
+            card.pack_start(top_row, False, False, 0)
+
+            # Details Grid: IP, Gateway, DNS, MAC
+            det_grid = Gtk.Grid()
+            det_grid.get_style_context().add_class("wired-detail-box")
+            det_grid.set_column_spacing(16)
+            det_grid.set_row_spacing(4)
+            det_grid.set_hexpand(True)
+
+            # Row 1: IP & Gateway
+            lbl_ip_t = Gtk.Label(label="IP Address:", xalign=0)
+            lbl_ip_t.get_style_context().add_class("stat-label")
+            lbl_ip_v = Gtk.Label(label=w["ip"], xalign=0)
+            lbl_ip_v.get_style_context().add_class("stat-value")
+
+            lbl_gw_t = Gtk.Label(label="Gateway:", xalign=0)
+            lbl_gw_t.get_style_context().add_class("stat-label")
+            lbl_gw_v = Gtk.Label(label=w["gateway"], xalign=0)
+            lbl_gw_v.get_style_context().add_class("stat-value")
+
+            det_grid.attach(lbl_ip_t, 0, 0, 1, 1)
+            det_grid.attach(lbl_ip_v, 1, 0, 1, 1)
+            det_grid.attach(lbl_gw_t, 2, 0, 1, 1)
+            det_grid.attach(lbl_gw_v, 3, 0, 1, 1)
+
+            # Row 2: DNS & MAC (if available)
+            if w.get("dns") and w["dns"] != "---":
+                lbl_dns_t = Gtk.Label(label="DNS Server:", xalign=0)
+                lbl_dns_t.get_style_context().add_class("stat-label")
+                lbl_dns_v = Gtk.Label(label=w["dns"], xalign=0)
+                lbl_dns_v.get_style_context().add_class("stat-value")
+                det_grid.attach(lbl_dns_t, 0, 1, 1, 1)
+                det_grid.attach(lbl_dns_v, 1, 1, 1, 1)
+
+            if w.get("mac") and w["mac"] != "---":
+                lbl_mac_t = Gtk.Label(label="MAC:", xalign=0)
+                lbl_mac_t.get_style_context().add_class("stat-label")
+                lbl_mac_v = Gtk.Label(label=w["mac"], xalign=0)
+                lbl_mac_v.get_style_context().add_class("stat-value")
+                det_grid.attach(lbl_mac_t, 2, 1, 1, 1)
+                det_grid.attach(lbl_mac_v, 3, 1, 1, 1)
+
+            card.pack_start(det_grid, False, False, 0)
+            self.wired_container.pack_start(card, False, False, 0)
+
+        self.wired_title.set_visible(True)
+        self.wired_container.set_visible(True)
+        for child in self.wired_container.get_children():
+            child.show_all()
+
+    def disconnect_wired(self, conn_name, device):
+        def worker():
+            try:
+                subprocess.run(["nmcli", "device", "disconnect", device], check=False)
+                subprocess.run(["nmcli", "connection", "down", conn_name], check=False)
+                subprocess.run([
+                    "notify-send", "-a", "Network", "-i", "network-wired-disconnected",
+                    "Wired Disconnected", f"Disconnected '{conn_name}'"
+                ], check=False)
+            except Exception as e:
+                print(f"Disconnect error: {e}")
+            self.scan_networks()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def disconnect_active_wifi(self):
+        if not self.active_ssid:
+            return
+        ssid = self.active_ssid
+        def worker():
+            try:
+                subprocess.run(["nmcli", "device", "disconnect", self.wifi_device], check=False)
+                subprocess.run([
+                    "notify-send", "-a", "Network", "-i", "network-wireless-disconnected",
+                    "Wi-Fi Disconnected", f"Disconnected from '{ssid}'"
+                ], check=False)
+            except Exception as e:
+                print(f"Disconnect Wi-Fi error: {e}")
+            self.scan_networks()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _do_scan_parse(self, async_render=True):
+        try:
+            # Ultra-fast cached scan result using --rescan no (<15ms)
             out = subprocess.check_output(
-                ["nmcli", "-m", "multiline", "-f", "ACTIVE,SSID,SIGNAL,SECURITY,BSSID", "device", "wifi", "list"],
+                ["nmcli", "-m", "multiline", "-f", "ACTIVE,SSID,SIGNAL,SECURITY,BSSID", "device", "wifi", "list", "--rescan", "no"],
                 text=True, stderr=subprocess.DEVNULL
             )
             saved_out = subprocess.check_output(
@@ -1237,7 +1605,7 @@ class WifiControlCenter(Gtk.Window):
             saved_ssids = set()
             for l in saved_out.strip().splitlines():
                 p = l.split(":")
-                if len(p) >= 3 and p[2] == "802-11-wireless":
+                if len(p) >= 3 and "wireless" in p[2]:
                     saved_ssids.add(p[0])
 
             current = {}
@@ -1256,8 +1624,7 @@ class WifiControlCenter(Gtk.Window):
                 entries.append(current)
 
             active_net = None
-            other_nets = []
-            seen = set()
+            raw_other_nets = []
 
             for item in entries:
                 ssid = item.get("SSID", "")
@@ -1274,19 +1641,42 @@ class WifiControlCenter(Gtk.Window):
                         "ssid": ssid, "signal": signal,
                         "security": security, "bssid": bssid
                     }
-                elif ssid not in seen:
-                    seen.add(ssid)
-                    other_nets.append({
+                else:
+                    raw_other_nets.append({
                         "ssid": ssid, "signal": signal,
                         "security": security, "saved": (ssid in saved_ssids)
                     })
 
-            other_nets.sort(key=lambda x: x["signal"], reverse=True)
-            GLib.idle_add(self._render_networks, active_net, other_nets)
+            # Exclude active connected SSID and deduplicate available networks
+            other_nets = []
+            seen = set()
+            if active_net:
+                seen.add(active_net["ssid"])
+
+            for net_item in sorted(raw_other_nets, key=lambda x: x["signal"], reverse=True):
+                if net_item["ssid"] not in seen:
+                    seen.add(net_item["ssid"])
+                    other_nets.append(net_item)
+
+            wired_list = self._detect_wired_connections()
+
+            if async_render:
+                GLib.idle_add(self._render_networks, active_net, other_nets, wired_list)
+            else:
+                self._render_networks(active_net, other_nets, wired_list)
         except Exception as e:
             print(f"Scan error: {e}")
 
-    def _render_networks(self, active_net, other_nets):
+    def _render_networks(self, active_net, other_nets, wired_list=None):
+        if wired_list is None:
+            wired_list = self._detect_wired_connections()
+
+        if active_net:
+            other_nets = [n for n in other_nets if n["ssid"] != active_net["ssid"]]
+
+        self.active_wired_devices = [w["device"] for w in wired_list]
+        self._render_wired_connections(wired_list)
+
         # Update Header
         if active_net:
             self.active_ssid = active_net["ssid"]
@@ -1295,6 +1685,11 @@ class WifiControlCenter(Gtk.Window):
             self.ssid_title.set_text(self.active_ssid)
             self.ssid_subtitle.set_text("COUNTING COLLISIONS")
             self.header_icon.set_text("")
+        elif wired_list:
+            self.active_ssid = ""
+            self.ssid_title.set_text(wired_list[0]["connection"])
+            self.ssid_subtitle.set_text(f"ETHERNET • {wired_list[0]['device'].upper()}")
+            self.header_icon.set_text("󰈀")
         else:
             self.active_ssid = ""
             self.ssid_title.set_text("Wi-Fi Disconnected" if self.wifi_enabled else "Wi-Fi Disabled")
@@ -1304,49 +1699,8 @@ class WifiControlCenter(Gtk.Window):
         # Update DNS Active Provider
         self.update_active_dns()
 
-        # Render Known / Active Card
-        for child in self.known_container.get_children():
-            self.known_container.remove(child)
-
-        if active_net:
-            card = Gtk.EventBox()
-            card.get_style_context().add_class("known-network-card")
-            card_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            card_box.set_margin_start(14)
-            card_box.set_margin_end(14)
-            card_box.set_margin_top(10)
-            card_box.set_margin_bottom(10)
-            card.add(card_box)
-
-            net_icon = Gtk.Label(label="")
-            net_icon.get_style_context().add_class("net-icon")
-            net_icon.set_size_request(24, 24)
-            net_icon.set_valign(Gtk.Align.CENTER)
-            net_icon.set_halign(Gtk.Align.CENTER)
-            card_box.pack_start(net_icon, False, False, 0)
-
-            info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            info_box.set_valign(Gtk.Align.CENTER)
-            lbl_ssid = Gtk.Label(label=active_net["ssid"], xalign=0)
-            lbl_ssid.get_style_context().add_class("net-ssid")
-            lbl_status = Gtk.Label(label="Connected", xalign=0)
-            lbl_status.get_style_context().add_class("net-status")
-            info_box.pack_start(lbl_ssid, False, False, 0)
-            info_box.pack_start(lbl_status, False, False, 0)
-            card_box.pack_start(info_box, True, True, 0)
-
-            if active_net["security"] and active_net["security"] != "--":
-                lock_icon = Gtk.Label(label="")
-                lock_icon.get_style_context().add_class("net-lock")
-                lock_icon.set_valign(Gtk.Align.CENTER)
-                card_box.pack_end(lock_icon, False, False, 0)
-
-            card.connect("button-press-event", self.on_active_card_clicked, active_net["ssid"])
-            self.known_container.pack_start(card, False, False, 0)
-            self.known_title.show()
-            self.known_container.show_all()
-        else:
-            self.known_title.hide()
+        # Update Active Wi-Fi Disconnect Button Visibility
+        self.btn_active_disc.set_visible(bool(active_net))
 
         # Render Other Networks List
         for child in self.other_container.get_children():
@@ -1374,11 +1728,11 @@ class WifiControlCenter(Gtk.Window):
             for net in other_nets:
                 row = Gtk.EventBox()
                 row.get_style_context().add_class("network-row")
-                row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                row_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
                 row_box.set_margin_start(10)
                 row_box.set_margin_end(10)
-                row_box.set_margin_top(7)
-                row_box.set_margin_bottom(7)
+                row_box.set_margin_top(6)
+                row_box.set_margin_bottom(6)
                 row.add(row_box)
 
                 # Signal icon
@@ -1386,7 +1740,7 @@ class WifiControlCenter(Gtk.Window):
                 icon_str = "󰤨" if sig >= 75 else ("󰤥" if sig >= 50 else ("󰤢" if sig >= 25 else "󰤟"))
                 icon_lbl = Gtk.Label(label=icon_str)
                 icon_lbl.get_style_context().add_class("net-icon")
-                icon_lbl.set_size_request(24, 24)
+                icon_lbl.set_size_request(22, 22)
                 icon_lbl.set_valign(Gtk.Align.CENTER)
                 row_box.pack_start(icon_lbl, False, False, 0)
 
@@ -1399,9 +1753,36 @@ class WifiControlCenter(Gtk.Window):
                     lock_lbl = Gtk.Label(label="")
                     lock_lbl.get_style_context().add_class("net-lock")
                     lock_lbl.set_valign(Gtk.Align.CENTER)
-                    row_box.pack_end(lock_lbl, False, False, 0)
+                    row_box.pack_start(lock_lbl, False, False, 4)
 
-                row.connect("button-press-event", self.on_network_row_clicked, net)
+                # Connect Button: Blue if previously connected (saved), Red if not previously connected (new)
+                is_saved = net.get("saved", False)
+                is_connecting = net["ssid"] in self.connecting_ssids
+                btn_connect = Gtk.Button(label="Connecting..." if is_connecting else "Connect")
+                if is_saved:
+                    btn_connect.get_style_context().add_class("btn-connect-blue")
+                    btn_connect.set_tooltip_text("Previously connected network")
+                else:
+                    btn_connect.get_style_context().add_class("btn-connect-red")
+                    btn_connect.set_tooltip_text("New network (not previously connected)")
+
+                if is_connecting:
+                    btn_connect.set_sensitive(False)
+
+                btn_connect.set_valign(Gtk.Align.CENTER)
+                btn_connect.connect("clicked", lambda w, n=net, b=btn_connect: self.trigger_network_connect(n, b))
+                row_box.pack_end(btn_connect, False, False, 0)
+
+                # Edit Option for previously connected / saved networks
+                if is_saved:
+                    btn_edit = Gtk.Button(label="󰏫")
+                    btn_edit.get_style_context().add_class("btn-edit")
+                    btn_edit.set_tooltip_text("Edit network settings & password")
+                    btn_edit.set_valign(Gtk.Align.CENTER)
+                    btn_edit.connect("clicked", lambda w, s=net["ssid"]: self.show_edit_network_dialog(s))
+                    row_box.pack_end(btn_edit, False, False, 4)
+
+                row.connect("button-press-event", lambda w, e, n=net, b=btn_connect: self.trigger_network_connect(n, b))
                 self.other_container.pack_start(row, False, False, 0)
 
         self.scroll_win.show_all()
@@ -1767,6 +2148,8 @@ class WifiControlCenter(Gtk.Window):
 
         btn_disc = Gtk.Button(label="Disconnect")
         btn_disc.get_style_context().add_class("action-btn")
+        btn_edit = Gtk.Button(label="󰏫 Edit")
+        btn_edit.get_style_context().add_class("action-btn")
         btn_forget = Gtk.Button(label="Forget")
         btn_forget.get_style_context().add_class("action-btn")
         btn_forget.get_style_context().add_class("danger")
@@ -1784,10 +2167,12 @@ class WifiControlCenter(Gtk.Window):
             self.scan_networks()
 
         btn_disc.connect("clicked", do_disconnect)
+        btn_edit.connect("clicked", lambda w: self.show_edit_network_dialog(ssid))
         btn_forget.connect("clicked", do_forget)
         btn_close.connect("clicked", lambda w: self.clear_overlay())
 
         btn_box.pack_start(btn_disc, True, True, 0)
+        btn_box.pack_start(btn_edit, True, True, 0)
         btn_box.pack_start(btn_forget, True, True, 0)
         btn_box.pack_start(btn_close, True, True, 0)
         card.pack_start(btn_box, False, False, 0)
@@ -1795,19 +2180,189 @@ class WifiControlCenter(Gtk.Window):
         self.overlay_container.pack_start(card, False, False, 0)
         self.overlay_container.show_all()
 
-    def on_network_row_clicked(self, widget, event, net):
+    def show_edit_network_dialog(self, ssid):
+        self.clear_overlay()
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        card.get_style_context().add_class("card-overlay")
+
+        # Title
+        title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        title_lbl = Gtk.Label(label=f"Edit Network: {ssid}", xalign=0)
+        title_lbl.get_style_context().add_class("ssid-title")
+        title_box.pack_start(title_lbl, True, True, 0)
+        card.pack_start(title_box, False, False, 0)
+
+        # Retrieve current password & autoconnect
+        curr_pwd = ""
+        autoconnect = "yes"
+        try:
+            out = subprocess.check_output([
+                "nmcli", "--show-secrets", "-g",
+                "802-11-wireless-security.psk,802-11-wireless-security.wep-key0,connection.autoconnect",
+                "connection", "show", ssid
+            ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
+            if len(out) >= 1 and out[0]:
+                curr_pwd = out[0]
+            if len(out) >= 2 and out[1]:
+                autoconnect = out[1].lower()
+            elif len(out) >= 3 and out[2]:
+                autoconnect = out[2].lower()
+        except Exception:
+            pass
+
+        # If not found by exact ssid, check uuid map
+        if not curr_pwd:
+            try:
+                conns = subprocess.check_output([
+                    "nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"
+                ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
+                for c in conns:
+                    parts = c.split(":")
+                    if len(parts) >= 3 and "wireless" in parts[2]:
+                        uuid = parts[1]
+                        conn_ssid = subprocess.check_output([
+                            "nmcli", "-g", "802-11-wireless.ssid", "connection", "show", uuid
+                        ], text=True, stderr=subprocess.DEVNULL).strip()
+                        if conn_ssid == ssid or parts[0] == ssid:
+                            p = subprocess.check_output([
+                                "nmcli", "--show-secrets", "-g",
+                                "802-11-wireless-security.psk,802-11-wireless-security.wep-key0",
+                                "connection", "show", uuid
+                            ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
+                            for line in p:
+                                if line:
+                                    curr_pwd = line
+                                    break
+                            auto = subprocess.check_output([
+                                "nmcli", "-g", "connection.autoconnect", "connection", "show", uuid
+                            ], text=True, stderr=subprocess.DEVNULL).strip()
+                            if auto:
+                                autoconnect = auto.lower()
+                            break
+            except Exception:
+                pass
+
+        # Password Input Field with Toggle Visibility
+        lbl_pwd = Gtk.Label(label="Password / Security Key:", xalign=0)
+        lbl_pwd.get_style_context().add_class("stat-label")
+        card.pack_start(lbl_pwd, False, False, 0)
+
+        pwd_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        entry_pwd = Gtk.Entry()
+        entry_pwd.set_text(curr_pwd)
+        entry_pwd.set_visibility(False)
+        pwd_box.pack_start(entry_pwd, True, True, 0)
+
+        btn_toggle_eye = Gtk.Button(label="")
+        btn_toggle_eye.get_style_context().add_class("btn-edit")
+        btn_toggle_eye.set_tooltip_text("Show/Hide password")
+
+        def toggle_pwd_vis(w):
+            vis = entry_pwd.get_visibility()
+            entry_pwd.set_visibility(not vis)
+            btn_toggle_eye.set_label("" if not vis else "")
+
+        btn_toggle_eye.connect("clicked", toggle_pwd_vis)
+        pwd_box.pack_end(btn_toggle_eye, False, False, 0)
+        card.pack_start(pwd_box, False, False, 0)
+
+        # Autoconnect Switch
+        auto_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        auto_box.set_margin_top(4)
+        auto_box.set_margin_bottom(4)
+        lbl_auto = Gtk.Label(label="Connect automatically", xalign=0)
+        lbl_auto.get_style_context().add_class("stat-label")
+        auto_box.pack_start(lbl_auto, True, True, 0)
+
+        sw_auto = Gtk.Switch()
+        sw_auto.set_active(autoconnect in ("yes", "true", "1"))
+        auto_box.pack_end(sw_auto, False, False, 0)
+        card.pack_start(auto_box, False, False, 0)
+
+        # Buttons Box (Save, Forget, Cancel)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_margin_top(4)
+
+        btn_save = Gtk.Button(label="Save")
+        btn_save.get_style_context().add_class("btn-connect-blue")
+        btn_forget = Gtk.Button(label="Forget")
+        btn_forget.get_style_context().add_class("action-btn")
+        btn_forget.get_style_context().add_class("danger")
+        btn_cancel = Gtk.Button(label="Cancel")
+        btn_cancel.get_style_context().add_class("action-btn")
+
+        def do_save(w):
+            new_pwd = entry_pwd.get_text()
+            auto_val = "yes" if sw_auto.get_active() else "no"
+            self.clear_overlay()
+
+            def worker():
+                try:
+                    if new_pwd:
+                        subprocess.run([
+                            "nmcli", "connection", "modify", ssid,
+                            "802-11-wireless-security.psk", new_pwd
+                        ], check=False)
+                    subprocess.run([
+                        "nmcli", "connection", "modify", ssid,
+                        "connection.autoconnect", auto_val
+                    ], check=False)
+                    subprocess.run([
+                        "notify-send", "-a", "Wi-Fi", "-i", "network-wireless",
+                        "Network Updated", f"Saved settings for '{ssid}'"
+                    ], check=False)
+                except Exception as e:
+                    print(f"Error saving network: {e}")
+                GLib.idle_add(self.scan_networks)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def do_forget(w):
+            self.clear_overlay()
+            def worker():
+                subprocess.run(["nmcli", "connection", "delete", ssid], check=False)
+                subprocess.run([
+                    "notify-send", "-a", "Wi-Fi", "-i", "network-wireless",
+                    "Network Removed", f"Forgot '{ssid}'"
+                ], check=False)
+                GLib.idle_add(self.scan_networks)
+            threading.Thread(target=worker, daemon=True).start()
+
+        btn_save.connect("clicked", do_save)
+        btn_forget.connect("clicked", do_forget)
+        btn_cancel.connect("clicked", lambda w: self.clear_overlay())
+        entry_pwd.connect("activate", do_save)
+
+        btn_box.pack_start(btn_save, True, True, 0)
+        btn_box.pack_start(btn_forget, True, True, 0)
+        btn_box.pack_start(btn_cancel, True, True, 0)
+        card.pack_start(btn_box, False, False, 0)
+
+        self.overlay_container.pack_start(card, False, False, 0)
+        self.overlay_container.show_all()
+        entry_pwd.grab_focus()
+
+    def trigger_network_connect(self, net, btn=None):
         ssid = net["ssid"]
         is_saved = net.get("saved", False)
         is_secured = bool(net["security"] and net["security"] != "--")
 
         if is_saved or not is_secured:
-            # Connect directly
+            self.connecting_ssids.add(ssid)
+            if btn:
+                btn.set_label("Connecting...")
+                btn.set_sensitive(False)
+
             def connect_worker():
-                if is_saved:
-                    subprocess.run(["nmcli", "connection", "up", ssid], check=False)
-                else:
-                    subprocess.run(["nmcli", "device", "wifi", "connect", ssid], check=False)
-                GLib.idle_add(self.scan_networks)
+                try:
+                    if is_saved:
+                        subprocess.run(["nmcli", "connection", "up", ssid], check=False)
+                    else:
+                        subprocess.run(["nmcli", "device", "wifi", "connect", ssid], check=False)
+                finally:
+                    self.connecting_ssids.discard(ssid)
+                    GLib.idle_add(self.scan_networks)
+
             threading.Thread(target=connect_worker, daemon=True).start()
             return
 
@@ -1825,30 +2380,42 @@ class WifiControlCenter(Gtk.Window):
         card.pack_start(entry, False, False, 0)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_connect = Gtk.Button(label="Connect")
-        btn_connect.get_style_context().add_class("action-btn")
+        btn_modal_connect = Gtk.Button(label="Connect")
+        btn_modal_connect.get_style_context().add_class("action-btn")
         btn_cancel = Gtk.Button(label="Cancel")
         btn_cancel.get_style_context().add_class("action-btn")
 
         def do_connect(w):
             pwd = entry.get_text()
             self.clear_overlay()
+            self.connecting_ssids.add(ssid)
+            if btn:
+                btn.set_label("Connecting...")
+                btn.set_sensitive(False)
+
             def worker():
-                subprocess.run(["nmcli", "device", "wifi", "connect", ssid, "password", pwd], check=False)
-                GLib.idle_add(self.scan_networks)
+                try:
+                    subprocess.run(["nmcli", "device", "wifi", "connect", ssid, "password", pwd], check=False)
+                finally:
+                    self.connecting_ssids.discard(ssid)
+                    GLib.idle_add(self.scan_networks)
+
             threading.Thread(target=worker, daemon=True).start()
 
-        btn_connect.connect("clicked", do_connect)
+        btn_modal_connect.connect("clicked", do_connect)
         btn_cancel.connect("clicked", lambda w: self.clear_overlay())
         entry.connect("activate", do_connect)
 
-        btn_box.pack_start(btn_connect, True, True, 0)
+        btn_box.pack_start(btn_modal_connect, True, True, 0)
         btn_box.pack_start(btn_cancel, True, True, 0)
         card.pack_start(btn_box, False, False, 0)
 
         self.overlay_container.pack_start(card, False, False, 0)
         self.overlay_container.show_all()
         entry.grab_focus()
+
+    def on_network_row_clicked(self, widget, event, net):
+        self.trigger_network_connect(net)
 
 
 def start_ipc_server(win):

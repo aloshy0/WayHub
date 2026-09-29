@@ -219,28 +219,46 @@ while IFS= read -r ssid; do
     else
         # Check if this SSID is already in saved connections
         if [ -n "${saved_conn_map["$ssid"]:-}" ]; then
-            display_line="$icon  $ssid  [$signal%]  󰌆 Saved"
+            display_line="$icon  $ssid  [$signal%]  󰌆 Saved  [Connect]"
         elif [ -n "$security" ] && [ "$security" != "--" ]; then
-            display_line="$icon  $ssid  [$signal%]  󰌾"
+            display_line="$icon  $ssid  [$signal%]  󰌾 New  [Connect]"
         else
-            display_line="$icon  $ssid  [$signal%]"
+            display_line="$icon  $ssid  [$signal%]  [Connect]"
         fi
         available_lines+="$display_line"$'\n'
         ssid_map["$display_line"]="$ssid"
     fi
 done <<< "$sorted_ssids"
 
+# Check if any wired interface is connected (hide if disconnected)
+wired_lines=""
+declare -A wired_conn_map
+
+while IFS=: read -r wdev wtype wstate wconn; do
+    if [ "$wtype" = "ethernet" ] && [ "$wstate" = "connected" ] && [ -n "$wconn" ]; then
+        wip=$(ip -4 addr show "$wdev" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+        wline="󰈀  $wconn ($wdev)  [${wip:-Connected}]"
+        wired_lines+="$wline"$'\n'
+        wired_conn_map["$wline"]="$wconn|$wdev"
+    fi
+done < <(nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null)
+
 # Build main menu contents
 menu_content="󰤮  Turn Off Wi-Fi"$'\n'
 menu_content+="󰂰  Refresh Networks"$'\n'
 
+if [ -n "$wired_lines" ]; then
+    menu_content+="── WIRED CONNECTION ──"$'\n'
+    menu_content+="$wired_lines"$'\n'
+fi
+
 if [ -n "$connected_line" ]; then
-    menu_content+="CONNECTED"$'\n'
+    menu_content+="── WI-FI CONNECTED ──"$'\n'
     menu_content+="$connected_line"$'\n'$'\n'
 fi
 
 if [ -n "$available_lines" ]; then
-    menu_content+="AVAILABLE NETWORKS"$'\n'
+    menu_content+="── AVAILABLE NETWORKS ──"$'\n'
     menu_content+="$available_lines"
 fi
 
@@ -248,7 +266,7 @@ menu_content+="─────────────────────�
 menu_content+="󰌆  SAVED NETWORKS"
 
 # Show main menu
-chosen=$(wofi --dmenu --prompt "Wi-Fi" --width 420 --height 500 <<< "$menu_content")
+chosen=$(wofi --dmenu --prompt "Network Menu" --width 420 --height 500 <<< "$menu_content")
 [ -z "$chosen" ] && exit 0
 
 # Handle static actions
@@ -264,7 +282,20 @@ elif [ "$chosen" = "󰂰  Refresh Networks" ]; then
 elif [ "$chosen" = "󰌆  SAVED NETWORKS" ]; then
     show_saved_networks
     exit 0
-elif [ "$chosen" = "CONNECTED" ] || [ "$chosen" = "AVAILABLE NETWORKS" ] || [ "$chosen" = "────────────────────────" ]; then
+elif [[ "$chosen" =~ ^──.* ]]; then
+    exit 0
+fi
+
+# Check if selected item is a Wired Connection
+if [ -n "${wired_conn_map["$chosen"]:-}" ]; then
+    IFS='|' read -r w_name w_dev <<< "${wired_conn_map["$chosen"]}"
+    action=$(printf "󰤮  Disconnect\n󰁍  Back\n" | wofi --dmenu --prompt "$w_name" --width 420 --height 180)
+    case "$action" in
+        "󰤮  Disconnect")
+            nmcli connection down "$w_name" >/dev/null 2>&1 || nmcli device disconnect "$w_dev" >/dev/null 2>&1
+            wifi_notify "Disconnected from $w_name" normal 2500
+            ;;
+    esac
     exit 0
 fi
 
