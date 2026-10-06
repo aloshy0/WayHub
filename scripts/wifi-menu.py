@@ -19,6 +19,12 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_version('GtkLayerShell', '0.1')
+try:
+    gi.require_version('NM', '1.0')
+    from gi.repository import NM
+    NM_AVAILABLE = True
+except Exception:
+    NM_AVAILABLE = False
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 SOCKET_PATH = f"/tmp/waybar_wifi_menu_{os.getuid()}.sock"
@@ -891,7 +897,10 @@ class WifiControlCenter(Gtk.Window):
         self.connect("destroy", Gtk.main_quit)
 
         # Network state variables
-        self.wifi_device = self.find_wifi_device()
+        self.wifi_device = "wlo1"
+        self._init_nm_client()
+        if not self.wifi_device:
+            self.wifi_device = self.find_wifi_device()
         self.prev_rx = 0
         self.prev_tx = 0
         self.prev_time = time.time()
@@ -1206,43 +1215,90 @@ class WifiControlCenter(Gtk.Window):
         self.other_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.scroll_win.add(self.other_container)
 
+    def _init_nm_client(self):
+        self.nm_client = None
+        self.nm_wifi_dev = None
+        if NM_AVAILABLE:
+            try:
+                self.nm_client = NM.Client.new(None)
+                for d in self.nm_client.get_devices():
+                    if isinstance(d, NM.DeviceWifi):
+                        self.nm_wifi_dev = d
+                        self.wifi_device = d.get_iface()
+                        break
+            except Exception as e:
+                print(f"NM Client init error: {e}")
+                self.nm_client = None
+
+    def _get_ap_security(self, ap):
+        try:
+            flags = ap.get_flags()
+            wpa_flags = ap.get_wpa_flags()
+            rsn_flags = ap.get_rsn_flags()
+            sec = []
+            if rsn_flags:
+                sec.append("WPA2/WPA3")
+            elif wpa_flags:
+                sec.append("WPA")
+            elif hasattr(NM, "80211ApFlags") and (flags & getattr(NM, "80211ApFlags").PRIVACY):
+                sec.append("WEP")
+            return " ".join(sec)
+        except Exception:
+            return ""
+
     # -------------------------------------------------------------
     # State & Polling (Fast, Latency-Free)
     # -------------------------------------------------------------
     def fetch_fast_initial_data(self):
-        """Immediately loads cached NM Wi-Fi data & network stats synchronously (<30ms)"""
+        """Immediately loads cached NM Wi-Fi data & network stats in memory (<2ms)"""
         try:
-            state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
-            self.wifi_enabled = (state == "enabled")
+            if self.nm_client:
+                self.wifi_enabled = self.nm_client.wireless_get_enabled()
+            else:
+                state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
+                self.wifi_enabled = (state == "enabled")
             self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
             self.wifi_switch.set_active(self.wifi_enabled)
             self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
         except Exception:
             pass
 
-        # 1. Immediate synchronous parse of cached network list
+        # 1. Immediate synchronous parse of in-memory network list (<1ms)
         self._do_scan_parse(async_render=False)
 
         # 2. Immediate interface stats
         self._update_interface_stats()
 
-        # 3. Fast IP and Gateway check
-        try:
-            out_ip = subprocess.check_output(
-                ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
-            )
-            m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
-            if m_ip:
-                self.v_ip.set_text(m_ip.group(1))
+        # 3. Fast IP and Gateway check from libnm in-memory data
+        if self.nm_wifi_dev:
+            try:
+                ip4 = self.nm_wifi_dev.get_ip4_config()
+                if ip4:
+                    addrs = ip4.get_addresses()
+                    if addrs:
+                        self.v_ip.set_text(addrs[0].get_address())
+                    gw = ip4.get_gateway()
+                    if gw:
+                        self.v_gw.set_text(gw)
+            except Exception:
+                pass
+        else:
+            try:
+                out_ip = subprocess.check_output(
+                    ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
+                )
+                m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
+                if m_ip:
+                    self.v_ip.set_text(m_ip.group(1))
 
-            out_gw = subprocess.check_output(
-                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
-            )
-            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
-            if m_gw:
-                self.v_gw.set_text(m_gw.group(1))
-        except Exception:
-            pass
+                out_gw = subprocess.check_output(
+                    ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
+                )
+                m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
+                if m_gw:
+                    self.v_gw.set_text(m_gw.group(1))
+            except Exception:
+                pass
 
         # 4. Asynchronously check ping in background so ping never delays UI
         threading.Thread(target=self._async_ping, daemon=True).start()
@@ -1250,9 +1306,12 @@ class WifiControlCenter(Gtk.Window):
     def poll_wifi_state(self):
         def worker():
             try:
-                state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
                 was_enabled = self.wifi_enabled
-                self.wifi_enabled = (state == "enabled")
+                if self.nm_client:
+                    self.wifi_enabled = self.nm_client.wireless_get_enabled()
+                else:
+                    state = subprocess.check_output(["nmcli", "radio", "wifi"], text=True, stderr=subprocess.DEVNULL).strip()
+                    self.wifi_enabled = (state == "enabled")
                 def update_switch():
                     self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
                     self.wifi_switch.set_active(self.wifi_enabled)
@@ -1275,13 +1334,19 @@ class WifiControlCenter(Gtk.Window):
             self._render_networks(None, [])
 
         def toggle_worker():
-            cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
-            subprocess.run(cmd, check=False)
+            if self.nm_client:
+                try:
+                    self.nm_client.wireless_set_enabled(state)
+                except Exception:
+                    cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
+                    subprocess.run(cmd, check=False)
+            else:
+                cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
+                subprocess.run(cmd, check=False)
+
             if state:
-                time.sleep(0.8)
-                subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-                time.sleep(1.0)
-                self._do_scan_parse()
+                time.sleep(0.5)
+                self.trigger_rescan()
             else:
                 self._do_scan_parse()
 
@@ -1324,19 +1389,29 @@ class WifiControlCenter(Gtk.Window):
         ip_addr = "Disconnected"
         gateway = "---"
         try:
-            out_ip = subprocess.check_output(
-                ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
-            )
-            m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
-            if m_ip:
-                ip_addr = m_ip.group(1)
+            if self.nm_wifi_dev:
+                ip4 = self.nm_wifi_dev.get_ip4_config()
+                if ip4:
+                    addrs = ip4.get_addresses()
+                    if addrs:
+                        ip_addr = addrs[0].get_address()
+                    gw = ip4.get_gateway()
+                    if gw:
+                        gateway = gw
+            else:
+                out_ip = subprocess.check_output(
+                    ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
+                )
+                m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
+                if m_ip:
+                    ip_addr = m_ip.group(1)
 
-            out_gw = subprocess.check_output(
-                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
-            )
-            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
-            if m_gw:
-                gateway = m_gw.group(1)
+                out_gw = subprocess.check_output(
+                    ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
+                )
+                m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
+                if m_gw:
+                    gateway = m_gw.group(1)
         except Exception:
             pass
 
@@ -1386,7 +1461,13 @@ class WifiControlCenter(Gtk.Window):
 
         def worker():
             if rescan:
-                subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+                if self.nm_wifi_dev:
+                    try:
+                        self.nm_wifi_dev.request_scan_async(None, None)
+                    except Exception:
+                        subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
             self._do_scan_parse()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1395,8 +1476,14 @@ class WifiControlCenter(Gtk.Window):
     def trigger_rescan(self):
         self.rescan_btn.set_sensitive(False)
         def worker():
-            subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-            time.sleep(1.0)
+            if self.nm_wifi_dev:
+                try:
+                    self.nm_wifi_dev.request_scan_async(None, None)
+                except Exception:
+                    subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+            time.sleep(0.3)
             self._do_scan_parse()
             GLib.idle_add(lambda: self.rescan_btn.set_sensitive(True))
         threading.Thread(target=worker, daemon=True).start()
@@ -1404,63 +1491,79 @@ class WifiControlCenter(Gtk.Window):
     def _detect_wired_connections(self):
         wired_list = []
         try:
-            dev_out = subprocess.check_output(
-                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
-                text=True, stderr=subprocess.DEVNULL
-            ).strip().splitlines()
-            for line in dev_out:
-                parts = line.split(":")
-                if len(parts) >= 4 and parts[1] == "ethernet" and parts[2] == "connected":
-                    dev_name = parts[0]
-                    conn_name = parts[3]
-                    ip_str = "---"
-                    gw_str = "---"
-                    dns_str = "---"
-                    mac_str = "---"
-                    speed = ""
-                    try:
-                        dev_info = subprocess.check_output(
-                            ["nmcli", "-t", "device", "show", dev_name],
-                            text=True, stderr=subprocess.DEVNULL
-                        ).splitlines()
-                        for l in dev_info:
-                            parts_info = l.split(":", 1)
-                            if len(parts_info) == 2:
-                                k, v = parts_info[0].strip(), parts_info[1].strip()
-                                if k.startswith("IP4.ADDRESS") and ip_str == "---":
-                                    ip_str = v.split("/")[0]
-                                elif k == "IP4.GATEWAY" and v:
-                                    gw_str = v
-                                elif k.startswith("IP4.DNS") and dns_str == "---" and v:
-                                    dns_str = v
-                                elif k == "GENERAL.HWADDR" and v:
-                                    mac_str = v
-                                elif k == "WIRED-PROPERTIES.SPEED" and v and v != "--":
-                                    speed = f"{v} Mb/s"
-                    except Exception:
-                        pass
-
-                    # Fallback to direct ip route if gateway wasn't found in device show
-                    if gw_str == "---":
+            if self.nm_client:
+                for d in self.nm_client.get_devices():
+                    if isinstance(d, NM.DeviceEthernet) and d.get_state() == NM.DeviceState.ACTIVATED:
+                        conn = d.get_active_connection()
+                        conn_name = conn.get_id() if conn else d.get_iface()
+                        ip_str = "---"
+                        gw_str = "---"
+                        dns_str = "---"
+                        ip4 = d.get_ip4_config()
+                        if ip4:
+                            addrs = ip4.get_addresses()
+                            if addrs:
+                                ip_str = addrs[0].get_address()
+                            gw_str = ip4.get_gateway() or "---"
+                            dns_arr = ip4.get_nameservers()
+                            if dns_arr:
+                                dns_str = ", ".join(dns_arr)
+                        mac_str = d.get_permanent_hw_address() or d.get_hw_address() or "---"
+                        speed = f"{d.get_speed()} Mb/s" if d.get_speed() > 0 else ""
+                        wired_list.append({
+                            "device": d.get_iface(),
+                            "connection": conn_name,
+                            "ip": ip_str,
+                            "gateway": gw_str,
+                            "dns": dns_str,
+                            "mac": mac_str,
+                            "speed": speed
+                        })
+            else:
+                dev_out = subprocess.check_output(
+                    ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+                    text=True, stderr=subprocess.DEVNULL
+                ).strip().splitlines()
+                for line in dev_out:
+                    parts = line.split(":")
+                    if len(parts) >= 4 and parts[1] == "ethernet" and parts[2] == "connected":
+                        dev_name = parts[0]
+                        conn_name = parts[3]
+                        ip_str = "---"
+                        gw_str = "---"
+                        dns_str = "---"
+                        mac_str = "---"
+                        speed = ""
                         try:
-                            out_gw = subprocess.check_output(
-                                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
-                            )
-                            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
-                            if m_gw:
-                                gw_str = m_gw.group(1)
+                            dev_info = subprocess.check_output(
+                                ["nmcli", "-t", "device", "show", dev_name],
+                                text=True, stderr=subprocess.DEVNULL
+                            ).splitlines()
+                            for l in dev_info:
+                                parts_info = l.split(":", 1)
+                                if len(parts_info) == 2:
+                                    k, v = parts_info[0].strip(), parts_info[1].strip()
+                                    if k.startswith("IP4.ADDRESS") and ip_str == "---":
+                                        ip_str = v.split("/")[0]
+                                    elif k == "IP4.GATEWAY" and v:
+                                        gw_str = v
+                                    elif k.startswith("IP4.DNS") and dns_str == "---" and v:
+                                        dns_str = v
+                                    elif k == "GENERAL.HWADDR" and v:
+                                        mac_str = v
+                                    elif k == "WIRED-PROPERTIES.SPEED" and v and v != "--":
+                                        speed = f"{v} Mb/s"
                         except Exception:
                             pass
-
-                    wired_list.append({
-                        "device": dev_name,
-                        "connection": conn_name,
-                        "ip": ip_str,
-                        "gateway": gw_str,
-                        "dns": dns_str,
-                        "mac": mac_str,
-                        "speed": speed
-                    })
+                        wired_list.append({
+                            "device": dev_name,
+                            "connection": conn_name,
+                            "ip": ip_str,
+                            "gateway": gw_str,
+                            "dns": dns_str,
+                            "mac": mac_str,
+                            "speed": speed
+                        })
         except Exception:
             pass
         return wired_list
@@ -1593,59 +1696,97 @@ class WifiControlCenter(Gtk.Window):
 
     def _do_scan_parse(self, async_render=True):
         try:
-            # Ultra-fast cached scan result using --rescan no (<15ms)
-            out = subprocess.check_output(
-                ["nmcli", "-m", "multiline", "-f", "ACTIVE,SSID,SIGNAL,SECURITY,BSSID", "device", "wifi", "list", "--rescan", "no"],
-                text=True, stderr=subprocess.DEVNULL
-            )
-            saved_out = subprocess.check_output(
-                ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"],
-                text=True, stderr=subprocess.DEVNULL
-            )
-            saved_ssids = set()
-            for l in saved_out.strip().splitlines():
-                p = l.split(":")
-                if len(p) >= 3 and "wireless" in p[2]:
-                    saved_ssids.add(p[0])
-
-            current = {}
-            entries = []
-            for line in out.splitlines():
-                m = re.match(r"^([A-Z-]+):\s*(.*)$", line)
-                if m:
-                    key, val = m.group(1), m.group(2).strip()
-                    if key == "ACTIVE":
-                        if current and current.get("SSID") and current.get("SSID") != "--":
-                            entries.append(current)
-                        current = {"ACTIVE": (val == "yes")}
-                    else:
-                        current[key] = val
-            if current and current.get("SSID") and current.get("SSID") != "--":
-                entries.append(current)
-
             active_net = None
             raw_other_nets = []
+            saved_ssids = set()
 
-            for item in entries:
-                ssid = item.get("SSID", "")
-                if not ssid or ssid == "--":
-                    continue
-                is_active = item.get("ACTIVE", False)
-                sig_str = item.get("SIGNAL", "0")
-                signal = int(sig_str) if sig_str.isdigit() else 0
-                security = item.get("SECURITY", "")
-                bssid = item.get("BSSID", "")
+            if self.nm_client and self.nm_wifi_dev:
+                # Fast in-memory libnm extraction (<1ms)
+                for conn in self.nm_client.get_connections():
+                    s_wifi = conn.get_setting_wireless()
+                    if s_wifi:
+                        sb = s_wifi.get_ssid()
+                        if sb:
+                            s_name = NM.utils_ssid_to_utf8(sb.get_data())
+                            if s_name:
+                                saved_ssids.add(s_name)
+                        elif conn.get_id():
+                            saved_ssids.add(conn.get_id())
 
-                if is_active:
-                    active_net = {
-                        "ssid": ssid, "signal": signal,
-                        "security": security, "bssid": bssid
-                    }
-                else:
+                active_ap = self.nm_wifi_dev.get_active_access_point()
+                active_ssid = ""
+                if active_ap:
+                    sb = active_ap.get_ssid()
+                    active_ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
+                    if active_ssid and active_ssid != "--":
+                        active_net = {
+                            "ssid": active_ssid,
+                            "signal": active_ap.get_strength(),
+                            "security": self._get_ap_security(active_ap),
+                            "bssid": active_ap.get_bssid() or ""
+                        }
+
+                for ap in self.nm_wifi_dev.get_access_points():
+                    sb = ap.get_ssid()
+                    ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
+                    if not ssid or ssid == "--" or (active_ssid and ssid == active_ssid):
+                        continue
                     raw_other_nets.append({
-                        "ssid": ssid, "signal": signal,
-                        "security": security, "saved": (ssid in saved_ssids)
+                        "ssid": ssid,
+                        "signal": ap.get_strength(),
+                        "security": self._get_ap_security(ap),
+                        "saved": (ssid in saved_ssids),
+                        "bssid": ap.get_bssid() or ""
                     })
+            else:
+                out = subprocess.check_output(
+                    ["nmcli", "-m", "multiline", "-f", "ACTIVE,SSID,SIGNAL,SECURITY,BSSID", "device", "wifi", "list", "--rescan", "no"],
+                    text=True, stderr=subprocess.DEVNULL
+                )
+                saved_out = subprocess.check_output(
+                    ["nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"],
+                    text=True, stderr=subprocess.DEVNULL
+                )
+                for l in saved_out.strip().splitlines():
+                    p = l.split(":")
+                    if len(p) >= 3 and "wireless" in p[2]:
+                        saved_ssids.add(p[0])
+
+                current = {}
+                entries = []
+                for line in out.splitlines():
+                    m = re.match(r"^([A-Z-]+):\s*(.*)$", line)
+                    if m:
+                        key, val = m.group(1), m.group(2).strip()
+                        if key == "ACTIVE":
+                            if current and current.get("SSID") and current.get("SSID") != "--":
+                                entries.append(current)
+                            current = {"ACTIVE": (val == "yes")}
+                        else:
+                            current[key] = val
+                if current and current.get("SSID") and current.get("SSID") != "--":
+                    entries.append(current)
+
+                for item in entries:
+                    ssid = item.get("SSID", "")
+                    if not ssid or ssid == "--":
+                        continue
+                    is_active = item.get("ACTIVE", False)
+                    sig_str = item.get("SIGNAL", "0")
+                    signal = int(sig_str) if sig_str.isdigit() else 0
+                    security = item.get("SECURITY", "")
+                    bssid = item.get("BSSID", "")
+
+                    if is_active:
+                        active_net = {
+                            "ssid": ssid, "signal": signal,
+                            "security": security, "bssid": bssid
+                        }
+                    else:
+                        raw_other_nets.append({
+                            "ssid": ssid, "signal": signal,
+                            "security": security, "saved": (ssid in saved_ssids)
+                        })
 
             # Exclude active connected SSID and deduplicate available networks
             other_nets = []
@@ -2192,56 +2333,6 @@ class WifiControlCenter(Gtk.Window):
         title_box.pack_start(title_lbl, True, True, 0)
         card.pack_start(title_box, False, False, 0)
 
-        # Retrieve current password & autoconnect
-        curr_pwd = ""
-        autoconnect = "yes"
-        try:
-            out = subprocess.check_output([
-                "nmcli", "--show-secrets", "-g",
-                "802-11-wireless-security.psk,802-11-wireless-security.wep-key0,connection.autoconnect",
-                "connection", "show", ssid
-            ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
-            if len(out) >= 1 and out[0]:
-                curr_pwd = out[0]
-            if len(out) >= 2 and out[1]:
-                autoconnect = out[1].lower()
-            elif len(out) >= 3 and out[2]:
-                autoconnect = out[2].lower()
-        except Exception:
-            pass
-
-        # If not found by exact ssid, check uuid map
-        if not curr_pwd:
-            try:
-                conns = subprocess.check_output([
-                    "nmcli", "-t", "-f", "NAME,UUID,TYPE", "connection", "show"
-                ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
-                for c in conns:
-                    parts = c.split(":")
-                    if len(parts) >= 3 and "wireless" in parts[2]:
-                        uuid = parts[1]
-                        conn_ssid = subprocess.check_output([
-                            "nmcli", "-g", "802-11-wireless.ssid", "connection", "show", uuid
-                        ], text=True, stderr=subprocess.DEVNULL).strip()
-                        if conn_ssid == ssid or parts[0] == ssid:
-                            p = subprocess.check_output([
-                                "nmcli", "--show-secrets", "-g",
-                                "802-11-wireless-security.psk,802-11-wireless-security.wep-key0",
-                                "connection", "show", uuid
-                            ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
-                            for line in p:
-                                if line:
-                                    curr_pwd = line
-                                    break
-                            auto = subprocess.check_output([
-                                "nmcli", "-g", "connection.autoconnect", "connection", "show", uuid
-                            ], text=True, stderr=subprocess.DEVNULL).strip()
-                            if auto:
-                                autoconnect = auto.lower()
-                            break
-            except Exception:
-                pass
-
         # Password Input Field with Toggle Visibility
         lbl_pwd = Gtk.Label(label="Password / Security Key:", xalign=0)
         lbl_pwd.get_style_context().add_class("stat-label")
@@ -2249,7 +2340,7 @@ class WifiControlCenter(Gtk.Window):
 
         pwd_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         entry_pwd = Gtk.Entry()
-        entry_pwd.set_text(curr_pwd)
+        entry_pwd.set_text("")
         entry_pwd.set_visibility(False)
         pwd_box.pack_start(entry_pwd, True, True, 0)
 
@@ -2275,9 +2366,49 @@ class WifiControlCenter(Gtk.Window):
         auto_box.pack_start(lbl_auto, True, True, 0)
 
         sw_auto = Gtk.Switch()
-        sw_auto.set_active(autoconnect in ("yes", "true", "1"))
+        sw_auto.set_active(True)
         auto_box.pack_end(sw_auto, False, False, 0)
         card.pack_start(auto_box, False, False, 0)
+
+        # Asynchronously fetch current password & autoconnect in background thread
+        def load_secrets_worker():
+            curr_pwd = ""
+            autoconnect = "yes"
+            conn_target = ssid
+            if self.nm_client:
+                for c in self.nm_client.get_connections():
+                    s_w = c.get_setting_wireless()
+                    if s_w:
+                        sb = s_w.get_ssid()
+                        c_ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
+                        if c_ssid == ssid or c.get_id() == ssid:
+                            conn_target = c.get_uuid()
+                            s_conn = c.get_setting_connection()
+                            if s_conn:
+                                autoconnect = "yes" if s_conn.get_autoconnect() else "no"
+                            break
+            try:
+                out = subprocess.check_output([
+                    "nmcli", "--show-secrets", "-g",
+                    "802-11-wireless-security.psk,802-11-wireless-security.wep-key0,connection.autoconnect",
+                    "connection", "show", conn_target
+                ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
+                if len(out) >= 1 and out[0]:
+                    curr_pwd = out[0]
+                if len(out) >= 2 and out[1]:
+                    autoconnect = out[1].lower()
+                elif len(out) >= 3 and out[2]:
+                    autoconnect = out[2].lower()
+            except Exception:
+                pass
+
+            def apply_loaded():
+                if curr_pwd:
+                    entry_pwd.set_text(curr_pwd)
+                sw_auto.set_active(autoconnect in ("yes", "true", "1"))
+            GLib.idle_add(apply_loaded)
+
+        threading.Thread(target=load_secrets_worker, daemon=True).start()
 
         # Buttons Box (Save, Forget, Cancel)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
