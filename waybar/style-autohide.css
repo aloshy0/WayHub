@@ -17,7 +17,8 @@ window#waybar {
 
 #custom-launcher,
 #group-workspaces,
-#group-apps,
+#temperature,
+#custom-gpu-temp,
 #group-system,
 #clock,
 #window,
@@ -151,27 +152,44 @@ window#waybar {
 }
 
 /* =========================
-   APPLICATION SHORTCUTS
+   CPU & GPU TEMPERATURE PILLS
    ========================= */
 
-#group-apps {
-    padding: 1px 4px;
+#temperature,
+#custom-gpu-temp {
+    min-width: 38px;
+    min-height: 38px;
+    padding: 0 10px;
     margin: 3px 2px;
+    transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
-#custom-terminal,
-#custom-browser,
-#custom-files {
-    padding: 0 6px;
-    color: #21a7ff;
+#temperature {
+    color: #fab387;
 }
 
-#custom-browser {
-    color: #21a7ff;
+#custom-gpu-temp {
+    color: #a6e3a1;
 }
 
-#custom-files {
-    color: #ff4fa3;
+#temperature.warning,
+#custom-gpu-temp.warning {
+    background: #fab387;
+    color: #0a0a0e;
+    border-color: #fab387;
+}
+
+#temperature.critical,
+#custom-gpu-temp.critical {
+    background: #f38ba8;
+    color: #0a0a0e;
+    border-color: #f38ba8;
+}
+
+#temperature selection,
+#custom-gpu-temp selection {
+    background: transparent;
+    color: inherit;
 }
 
 /* =========================
