@@ -894,10 +894,27 @@ class WifiControlCenter(Gtk.Window):
 
         self.connect("draw", self.on_window_draw)
         self.connect("key-press-event", self.on_key_press)
-        self.connect("destroy", Gtk.main_quit)
+        self.connect("destroy", self.on_destroy)
 
         # Network state variables
         self.wifi_device = "wlo1"
+        self.nm_client = None
+        self.nm_wifi_dev = None
+        self.is_scanning = False
+        self._pending_scan_on_ready = False
+        self._scan_start_last_scan = -1
+        self._scan_timeout_id = None
+        self._ap_refresh_id = None
+        self._periodic_scan_id = None
+        self._poll_stats_id = None
+        self._nm_client_signals = []
+        self._nm_dev_signals = []
+        self._has_other_networks = False
+        self._displayed_other_nets = []
+        self._last_other_sig = None
+        self._last_wired_sig = None
+        self._destroyed = False
+
         self._init_nm_client()
         if not self.wifi_device:
             self.wifi_device = self.find_wifi_device()
@@ -915,12 +932,15 @@ class WifiControlCenter(Gtk.Window):
         self.init_ui()
         self.apply_css()
 
-        # Immediate fast synchronous initial state load (~25ms)
+        # Immediate fast synchronous initial state load (<25ms)
         self.fetch_fast_initial_data()
 
+        # Trigger non-blocking background scan right after initial render if cache may be stale
+        GLib.idle_add(self._maybe_initial_scan)
+
         # Timers for background updates
-        GLib.timeout_add(1500, self.poll_stats)
-        GLib.timeout_add(10000, self.scan_networks)
+        self._poll_stats_id = GLib.timeout_add(1500, self.poll_stats)
+        self._periodic_scan_id = GLib.timeout_add(12000, self._periodic_rescan)
 
     def on_window_draw(self, widget, cr):
         # 1. Clear fullscreen backdrop to transparent
@@ -1196,12 +1216,19 @@ class WifiControlCenter(Gtk.Window):
         self.other_title.get_style_context().add_class("section-title")
         other_header.pack_start(self.other_title, True, True, 0)
 
+        self.scan_status_lbl = Gtk.Label(label="Scanning...", xalign=1)
+        self.scan_status_lbl.get_style_context().add_class("stat-label")
+        self.scan_status_lbl.set_valign(Gtk.Align.CENTER)
+        self.scan_status_lbl.set_no_show_all(True)
+        self.scan_status_lbl.set_visible(False)
+
         self.rescan_btn = Gtk.Button(label="󰑐")
         self.rescan_btn.get_style_context().add_class("flat-icon-btn")
         self.rescan_btn.set_valign(Gtk.Align.CENTER)
         self.rescan_btn.set_tooltip_text("Rescan networks")
         self.rescan_btn.connect("clicked", lambda w: self.trigger_rescan())
         other_header.pack_end(self.rescan_btn, False, False, 0)
+        other_header.pack_end(self.scan_status_lbl, False, False, 6)
         main_box.pack_start(other_header, False, False, 0)
 
         # Scrollable area for other networks
@@ -1215,20 +1242,148 @@ class WifiControlCenter(Gtk.Window):
         self.other_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.scroll_win.add(self.other_container)
 
+    def on_destroy(self, widget):
+        self._destroyed = True
+        for attr in ("_scan_timeout_id", "_ap_refresh_id", "_periodic_scan_id", "_poll_stats_id"):
+            sid = getattr(self, attr, None)
+            if sid is not None:
+                GLib.source_remove(sid)
+                setattr(self, attr, None)
+        self._disconnect_nm_signals()
+        if Gtk.main_level() > 0:
+            Gtk.main_quit()
+
+    def _disconnect_signals(self, signal_list):
+        for obj, hid in signal_list:
+            try:
+                obj.disconnect(hid)
+            except Exception:
+                pass
+        signal_list.clear()
+
+    def _disconnect_nm_signals(self):
+        self._disconnect_signals(self._nm_dev_signals)
+        self._disconnect_signals(self._nm_client_signals)
+
+    def _bind_wifi_device(self, dev):
+        self._disconnect_signals(self._nm_dev_signals)
+
+        self.nm_wifi_dev = dev
+        if not dev:
+            return
+        self.wifi_device = dev.get_iface()
+        self._nm_dev_signals.extend([
+            (dev, dev.connect("access-point-added", lambda *a: self._schedule_ap_refresh(60))),
+            (dev, dev.connect("access-point-removed", lambda *a: self._schedule_ap_refresh(60))),
+            (dev, dev.connect("notify::active-access-point", lambda *a: self._schedule_ap_refresh(30))),
+            (dev, dev.connect("notify::last-scan", self._on_nm_last_scan)),
+            (dev, dev.connect("state-changed", self._on_nm_device_state_changed)),
+        ])
+
     def _init_nm_client(self):
+        self._disconnect_nm_signals()
         self.nm_client = None
         self.nm_wifi_dev = None
         if NM_AVAILABLE:
             try:
                 self.nm_client = NM.Client.new(None)
+                self._nm_client_signals.extend([
+                    (self.nm_client, self.nm_client.connect("notify::wireless-enabled", self._on_nm_wireless_enabled)),
+                    (self.nm_client, self.nm_client.connect("notify::active-connections", lambda *a: self._schedule_ap_refresh(40))),
+                    (self.nm_client, self.nm_client.connect("device-added", self._on_nm_devices_changed)),
+                    (self.nm_client, self.nm_client.connect("device-removed", self._on_nm_devices_changed)),
+                ])
                 for d in self.nm_client.get_devices():
                     if isinstance(d, NM.DeviceWifi):
-                        self.nm_wifi_dev = d
-                        self.wifi_device = d.get_iface()
+                        self._bind_wifi_device(d)
                         break
             except Exception as e:
                 print(f"NM Client init error: {e}")
+                self._disconnect_nm_signals()
                 self.nm_client = None
+
+    def _on_nm_devices_changed(self, client, dev):
+        if self._destroyed:
+            return
+        wifi_dev = None
+        for d in client.get_devices():
+            if isinstance(d, NM.DeviceWifi):
+                wifi_dev = d
+                break
+        if wifi_dev is not self.nm_wifi_dev:
+            self._bind_wifi_device(wifi_dev)
+        self._schedule_ap_refresh(60)
+
+    def _schedule_ap_refresh(self, delay_ms=60):
+        if self._destroyed or self._ap_refresh_id is not None:
+            return
+        self._ap_refresh_id = GLib.timeout_add(delay_ms, self._run_scheduled_ap_refresh)
+
+    def _run_scheduled_ap_refresh(self):
+        self._ap_refresh_id = None
+        if not self._destroyed:
+            self._do_scan_parse(async_render=False)
+        return False
+
+    def _on_nm_last_scan(self, dev, pspec):
+        if self._destroyed:
+            return
+        new_last_scan = dev.get_last_scan()
+        if self.is_scanning and new_last_scan != self._scan_start_last_scan:
+            self._finish_scan_state(refresh=True)
+        else:
+            self._schedule_ap_refresh(20)
+
+    def _on_nm_device_state_changed(self, dev, new_state, old_state, reason):
+        if self._destroyed:
+            return
+        if new_state >= NM.DeviceState.DISCONNECTED and self._pending_scan_on_ready and self.wifi_enabled:
+            self._pending_scan_on_ready = False
+            self._start_nm_scan()
+        self._schedule_ap_refresh(40)
+
+    def _on_nm_wireless_enabled(self, client, pspec):
+        if self._destroyed:
+            return
+        was_enabled = self.wifi_enabled
+        self.wifi_enabled = client.wireless_get_enabled()
+        self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
+        self.wifi_switch.set_active(self.wifi_enabled)
+        self.wifi_switch.set_state(self.wifi_enabled)
+        self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
+
+        if self.wifi_enabled and not was_enabled:
+            if self.nm_wifi_dev and self.nm_wifi_dev.get_state() >= NM.DeviceState.DISCONNECTED:
+                self.trigger_rescan()
+            else:
+                self._pending_scan_on_ready = True
+                self._set_scanning_ui(True)
+                self._do_scan_parse(async_render=False)
+        elif not self.wifi_enabled:
+            self._pending_scan_on_ready = False
+            self._finish_scan_state(refresh=True)
+
+    def _set_scanning_ui(self, scanning):
+        self.is_scanning = scanning
+        self.rescan_btn.set_sensitive(not scanning)
+        self.scan_status_lbl.set_visible(scanning)
+
+    def _maybe_initial_scan(self):
+        if self._destroyed or not self.wifi_enabled:
+            return False
+        if self.nm_wifi_dev:
+            if self.nm_wifi_dev.get_state() < NM.DeviceState.DISCONNECTED:
+                self._pending_scan_on_ready = True
+                self._set_scanning_ui(True)
+                self._do_scan_parse(async_render=False)
+                return False
+            last_scan = self.nm_wifi_dev.get_last_scan()
+            now_ms = NM.utils_get_timestamp_msec()
+            if last_scan <= 0 or (now_ms - last_scan) > 3000 or not self._has_other_networks:
+                self.trigger_rescan()
+        else:
+            self.trigger_rescan()
+        return False
 
     def _get_ap_security(self, ap):
         try:
@@ -1259,6 +1414,7 @@ class WifiControlCenter(Gtk.Window):
                 self.wifi_enabled = (state == "enabled")
             self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
             self.wifi_switch.set_active(self.wifi_enabled)
+            self.wifi_switch.set_state(self.wifi_enabled)
             self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
         except Exception:
             pass
@@ -1270,16 +1426,20 @@ class WifiControlCenter(Gtk.Window):
         self._update_interface_stats()
 
         # 3. Fast IP and Gateway check from libnm in-memory data
+        ip_addr = "0.0.0.0"
+        gateway = "0.0.0.0"
         if self.nm_wifi_dev:
             try:
                 ip4 = self.nm_wifi_dev.get_ip4_config()
                 if ip4:
                     addrs = ip4.get_addresses()
                     if addrs:
-                        self.v_ip.set_text(addrs[0].get_address())
+                        ip_addr = addrs[0].get_address()
+                        self.v_ip.set_text(ip_addr)
                     gw = ip4.get_gateway()
                     if gw:
-                        self.v_gw.set_text(gw)
+                        gateway = gw
+                        self.v_gw.set_text(gateway)
             except Exception:
                 pass
         else:
@@ -1289,19 +1449,21 @@ class WifiControlCenter(Gtk.Window):
                 )
                 m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
                 if m_ip:
-                    self.v_ip.set_text(m_ip.group(1))
+                    ip_addr = m_ip.group(1)
+                    self.v_ip.set_text(ip_addr)
 
                 out_gw = subprocess.check_output(
                     ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
                 )
                 m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
                 if m_gw:
-                    self.v_gw.set_text(m_gw.group(1))
+                    gateway = m_gw.group(1)
+                    self.v_gw.set_text(gateway)
             except Exception:
                 pass
 
         # 4. Asynchronously check ping in background so ping never delays UI
-        threading.Thread(target=self._async_ping, daemon=True).start()
+        threading.Thread(target=self._async_ping, args=(ip_addr, gateway), daemon=True).start()
 
     def poll_wifi_state(self):
         def worker():
@@ -1315,43 +1477,76 @@ class WifiControlCenter(Gtk.Window):
                 def update_switch():
                     self.wifi_switch.handler_block_by_func(self.on_switch_toggled)
                     self.wifi_switch.set_active(self.wifi_enabled)
+                    self.wifi_switch.set_state(self.wifi_enabled)
                     self.wifi_switch.handler_unblock_by_func(self.on_switch_toggled)
                 GLib.idle_add(update_switch)
 
                 if not was_enabled and self.wifi_enabled:
-                    self.scan_networks(rescan=True)
+                    GLib.idle_add(self.scan_networks, True)
             except Exception:
                 pass
+        if not self.nm_client:
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _toggle_wifi_via_nmcli(self, state):
+        def worker():
+            subprocess.run(["nmcli", "radio", "wifi", "on" if state else "off"], check=False)
+            if state:
+                time.sleep(0.5)
+                GLib.idle_add(self.trigger_rescan)
+            else:
+                GLib.idle_add(self.scan_networks)
         threading.Thread(target=worker, daemon=True).start()
 
     def on_switch_toggled(self, switch, state):
         self.wifi_enabled = state
+        switch.set_state(state)
         if not state:
+            self._pending_scan_on_ready = False
+            self._finish_scan_state(refresh=False)
             self.active_ssid = ""
             self.ssid_title.set_text("Wi-Fi Disabled")
             self.ssid_subtitle.set_text("NO ACTIVE CONNECTION")
             self.header_icon.set_text("󰤮")
             self._render_networks(None, [])
+        else:
+            self._set_scanning_ui(True)
+            self.ssid_title.set_text("Enabling Wi-Fi...")
+            self.ssid_subtitle.set_text("SCANNING FOR NETWORKS")
+            self._render_networks(None, [])
 
-        def toggle_worker():
-            if self.nm_client:
-                try:
-                    self.nm_client.wireless_set_enabled(state)
-                except Exception:
-                    cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
-                    subprocess.run(cmd, check=False)
-            else:
-                cmd = ["nmcli", "radio", "wifi", "on" if state else "off"]
-                subprocess.run(cmd, check=False)
-
+        if self.nm_client:
             if state:
-                time.sleep(0.5)
-                self.trigger_rescan()
-            else:
-                self._do_scan_parse()
+                self._pending_scan_on_ready = True
+                self._arm_scan_timeout(10000)
+            try:
+                self.nm_client.dbus_set_property(
+                    NM.DBUS_PATH,
+                    NM.DBUS_INTERFACE,
+                    "WirelessEnabled",
+                    GLib.Variant("b", state),
+                    5000,
+                    None,
+                    self._on_wireless_toggle_done,
+                    state,
+                )
+            except Exception:
+                self._toggle_wifi_via_nmcli(state)
+        else:
+            self._toggle_wifi_via_nmcli(state)
 
-        threading.Thread(target=toggle_worker, daemon=True).start()
         return True
+
+    def _on_wireless_toggle_done(self, client, res, state):
+        if self._destroyed:
+            return
+        try:
+            client.dbus_set_property_finish(res)
+            if state and self.nm_wifi_dev and self.nm_wifi_dev.get_state() >= NM.DeviceState.DISCONNECTED:
+                self._pending_scan_on_ready = False
+                self._start_nm_scan()
+        except Exception:
+            self._toggle_wifi_via_nmcli(state)
 
     def _update_interface_stats(self):
         try:
@@ -1381,15 +1576,13 @@ class WifiControlCenter(Gtk.Window):
             pass
 
     def poll_stats(self):
+        if self._destroyed:
+            return False
         self._update_interface_stats()
-        threading.Thread(target=self._fetch_network_details, daemon=True).start()
-        return True
-
-    def _fetch_network_details(self):
-        ip_addr = "Disconnected"
-        gateway = "---"
-        try:
-            if self.nm_wifi_dev:
+        if self.nm_wifi_dev:
+            ip_addr = "Disconnected"
+            gateway = "---"
+            try:
                 ip4 = self.nm_wifi_dev.get_ip4_config()
                 if ip4:
                     addrs = ip4.get_addresses()
@@ -1398,29 +1591,52 @@ class WifiControlCenter(Gtk.Window):
                     gw = ip4.get_gateway()
                     if gw:
                         gateway = gw
-            else:
-                out_ip = subprocess.check_output(
-                    ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
-                )
-                m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
-                if m_ip:
-                    ip_addr = m_ip.group(1)
+            except Exception:
+                pass
+            self.v_ip.set_text(ip_addr)
+            self.v_gw.set_text(gateway)
+            threading.Thread(target=self._async_ping, args=(ip_addr, gateway), daemon=True).start()
+        else:
+            threading.Thread(target=self._fetch_network_details, daemon=True).start()
+        return True
 
-                out_gw = subprocess.check_output(
-                    ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
-                )
-                m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
-                if m_gw:
-                    gateway = m_gw.group(1)
+    def _fetch_network_details(self):
+        ip_addr = "Disconnected"
+        gateway = "---"
+        try:
+            out_ip = subprocess.check_output(
+                ["ip", "-4", "addr", "show", self.wifi_device], text=True, stderr=subprocess.DEVNULL
+            )
+            m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
+            if m_ip:
+                ip_addr = m_ip.group(1)
+
+            out_gw = subprocess.check_output(
+                ["ip", "-4", "route", "show", "default"], text=True, stderr=subprocess.DEVNULL
+            )
+            m_gw = re.search(r"via\s+([0-9.]+)", out_gw)
+            if m_gw:
+                gateway = m_gw.group(1)
         except Exception:
             pass
 
-        GLib.idle_add(lambda: (self.v_ip.set_text(ip_addr), self.v_gw.set_text(gateway)))
-        self._async_ping()
+        GLib.idle_add(self._set_ip_gw_labels, ip_addr, gateway)
+        self._async_ping(ip_addr, gateway)
 
-    def _async_ping(self):
-        gw = self.v_gw.get_text()
-        target = gw if (gw and gw != "---" and gw != "0.0.0.0") else "1.1.1.1"
+    def _set_ip_gw_labels(self, ip_addr, gateway):
+        if not self._destroyed:
+            self.v_ip.set_text(ip_addr)
+            self.v_gw.set_text(gateway)
+        return False
+
+    def _set_ping_labels(self, ping_str, loss_str):
+        if not self._destroyed:
+            self.v_ping.set_text(ping_str)
+            self.v_loss.set_text(loss_str)
+        return False
+
+    def _async_ping(self, ip_addr="", gateway="---"):
+        target = gateway if (gateway and gateway not in ("---", "0.0.0.0")) else "1.1.1.1"
         ping_str = "---"
         loss_str = "0%"
         try:
@@ -1434,9 +1650,9 @@ class WifiControlCenter(Gtk.Window):
             if m_time:
                 ping_str = f"{int(float(m_time.group(1)))} ms"
         except Exception:
-            loss_str = "100%" if self.v_ip.get_text() not in ("Disconnected", "0.0.0.0") else "---"
+            loss_str = "100%" if ip_addr not in ("", "Disconnected", "0.0.0.0") else "---"
 
-        GLib.idle_add(lambda: (self.v_ping.set_text(ping_str), self.v_loss.set_text(loss_str)))
+        GLib.idle_add(self._set_ping_labels, ping_str, loss_str)
 
     def format_rate(self, b_per_sec):
         if b_per_sec < 1024:
@@ -1454,39 +1670,114 @@ class WifiControlCenter(Gtk.Window):
         else:
             return f"{b / (1024 * 1024 * 1024):.2f} GB"
 
+    def _periodic_rescan(self):
+        if self._destroyed:
+            return False
+        self.scan_networks(rescan=True)
+        return True
+
     def scan_networks(self, rescan=False):
+        if self._destroyed:
+            return False
+        if self.nm_client and self.nm_wifi_dev:
+            if rescan and self.wifi_enabled and not self.is_scanning:
+                last_scan = self.nm_wifi_dev.get_last_scan()
+                now_ms = NM.utils_get_timestamp_msec()
+                if last_scan <= 0 or (now_ms - last_scan) >= 10000:
+                    self.trigger_rescan()
+                    return False
+            self._do_scan_parse(async_render=False)
+            return False
+
         if not self.wifi_enabled:
-            self._do_scan_parse()
-            return True
+            threading.Thread(target=self._do_scan_parse, daemon=True).start()
+            return False
 
         def worker():
             if rescan:
-                if self.nm_wifi_dev:
-                    try:
-                        self.nm_wifi_dev.request_scan_async(None, None)
-                    except Exception:
-                        subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-                else:
-                    subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+                subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
             self._do_scan_parse()
 
         threading.Thread(target=worker, daemon=True).start()
-        return True
+        return False
+
+    def _arm_scan_timeout(self, timeout_ms=8000):
+        if self._scan_timeout_id is not None:
+            GLib.source_remove(self._scan_timeout_id)
+        self._scan_timeout_id = GLib.timeout_add(timeout_ms, self._on_scan_timeout)
 
     def trigger_rescan(self):
-        self.rescan_btn.set_sensitive(False)
-        def worker():
-            if self.nm_wifi_dev:
-                try:
-                    self.nm_wifi_dev.request_scan_async(None, None)
-                except Exception:
-                    subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+        if self._destroyed or not self.wifi_enabled or self.is_scanning:
+            return
+        self._set_scanning_ui(True)
+        if not self._has_other_networks:
+            if self.nm_client and self.nm_wifi_dev:
+                self._do_scan_parse(async_render=False)
             else:
-                subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
-            time.sleep(0.3)
-            self._do_scan_parse()
-            GLib.idle_add(lambda: self.rescan_btn.set_sensitive(True))
+                self._render_networks(None, [])
+
+        if self.nm_wifi_dev:
+            if self.nm_wifi_dev.get_state() < NM.DeviceState.DISCONNECTED:
+                self._pending_scan_on_ready = True
+                self._arm_scan_timeout(8000)
+                return
+            self._start_nm_scan()
+            return
+
+        def worker():
+            subprocess.run(["nmcli", "device", "wifi", "rescan"], stderr=subprocess.DEVNULL)
+            self._do_scan_parse(async_render=True)
+            GLib.idle_add(self._finish_scan_state, False)
         threading.Thread(target=worker, daemon=True).start()
+
+    def _start_nm_scan(self):
+        if self._destroyed or not self.nm_wifi_dev:
+            return
+        self._scan_start_last_scan = self.nm_wifi_dev.get_last_scan()
+        self._arm_scan_timeout(8000)
+        try:
+            if hasattr(self.nm_wifi_dev, "request_scan_options_async"):
+                self.nm_wifi_dev.request_scan_options_async(
+                    GLib.Variant("a{sv}", {}), None, self._on_request_scan_done, None
+                )
+            else:
+                self.nm_wifi_dev.request_scan_async(None, self._on_request_scan_done, None)
+        except Exception:
+            self._finish_scan_state(refresh=True)
+
+    def _on_request_scan_done(self, dev, res, user_data):
+        if self._destroyed:
+            return
+        try:
+            dev.request_scan_finish(res)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "already" in err_msg or "in progress" in err_msg:
+                return
+            self._finish_scan_state(refresh=True)
+
+    def _on_scan_timeout(self):
+        self._scan_timeout_id = None
+        if not self._destroyed:
+            self._finish_scan_state(refresh=True)
+        return False
+
+    def _finish_scan_state(self, refresh=True):
+        if self._scan_timeout_id is not None:
+            GLib.source_remove(self._scan_timeout_id)
+            self._scan_timeout_id = None
+        if self._ap_refresh_id is not None:
+            GLib.source_remove(self._ap_refresh_id)
+            self._ap_refresh_id = None
+        if self._destroyed:
+            return False
+        self._set_scanning_ui(False)
+        if refresh:
+            if self.nm_client and self.nm_wifi_dev:
+                self._do_scan_parse(async_render=False)
+            else:
+                self.scan_networks()
+        return False
 
     def _detect_wired_connections(self):
         wired_list = []
@@ -1569,8 +1860,17 @@ class WifiControlCenter(Gtk.Window):
         return wired_list
 
     def _render_wired_connections(self, wired_list):
+        wired_sig = tuple(
+            (w["device"], w["connection"], w["ip"], w["gateway"], w["dns"], w["mac"], w["speed"])
+            for w in wired_list
+        )
+        if wired_sig == self._last_wired_sig:
+            return
+        self._last_wired_sig = wired_sig
+
         for child in self.wired_container.get_children():
             self.wired_container.remove(child)
+            child.destroy()
 
         if not wired_list:
             self.wired_title.set_visible(False)
@@ -1675,7 +1975,7 @@ class WifiControlCenter(Gtk.Window):
                 ], check=False)
             except Exception as e:
                 print(f"Disconnect error: {e}")
-            self.scan_networks()
+            GLib.idle_add(self.scan_networks)
         threading.Thread(target=worker, daemon=True).start()
 
     def disconnect_active_wifi(self):
@@ -1691,7 +1991,7 @@ class WifiControlCenter(Gtk.Window):
                 ], check=False)
             except Exception as e:
                 print(f"Disconnect Wi-Fi error: {e}")
-            self.scan_networks()
+            GLib.idle_add(self.scan_networks)
         threading.Thread(target=worker, daemon=True).start()
 
     def _do_scan_parse(self, async_render=True):
@@ -1700,14 +2000,24 @@ class WifiControlCenter(Gtk.Window):
             raw_other_nets = []
             saved_ssids = set()
 
+            if not self.wifi_enabled:
+                other_nets = []
+                wired_list = self._detect_wired_connections()
+                if async_render:
+                    GLib.idle_add(self._render_networks, None, other_nets, wired_list)
+                else:
+                    self._render_networks(None, other_nets, wired_list)
+                return
+
             if self.nm_client and self.nm_wifi_dev:
                 # Fast in-memory libnm extraction (<1ms)
                 for conn in self.nm_client.get_connections():
                     s_wifi = conn.get_setting_wireless()
                     if s_wifi:
                         sb = s_wifi.get_ssid()
-                        if sb:
-                            s_name = NM.utils_ssid_to_utf8(sb.get_data())
+                        data = sb.get_data() if sb else None
+                        if data:
+                            s_name = NM.utils_ssid_to_utf8(data)
                             if s_name:
                                 saved_ssids.add(s_name)
                         elif conn.get_id():
@@ -1717,7 +2027,8 @@ class WifiControlCenter(Gtk.Window):
                 active_ssid = ""
                 if active_ap:
                     sb = active_ap.get_ssid()
-                    active_ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
+                    data = sb.get_data() if sb else None
+                    active_ssid = NM.utils_ssid_to_utf8(data) if data else ""
                     if active_ssid and active_ssid != "--":
                         active_net = {
                             "ssid": active_ssid,
@@ -1728,7 +2039,8 @@ class WifiControlCenter(Gtk.Window):
 
                 for ap in self.nm_wifi_dev.get_access_points():
                     sb = ap.get_ssid()
-                    ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
+                    data = sb.get_data() if sb else None
+                    ssid = NM.utils_ssid_to_utf8(data) if data else ""
                     if not ssid or ssid == "--" or (active_ssid and ssid == active_ssid):
                         continue
                     raw_other_nets.append({
@@ -1799,6 +2111,15 @@ class WifiControlCenter(Gtk.Window):
                     seen.add(net_item["ssid"])
                     other_nets.append(net_item)
 
+            if self.is_scanning and self.wifi_enabled and self._displayed_other_nets:
+                for prev_item in self._displayed_other_nets:
+                    if prev_item["ssid"] not in seen:
+                        seen.add(prev_item["ssid"])
+                        merged_item = dict(prev_item)
+                        merged_item["saved"] = (prev_item["ssid"] in saved_ssids)
+                        other_nets.append(merged_item)
+                other_nets.sort(key=lambda x: x["signal"], reverse=True)
+
             wired_list = self._detect_wired_connections()
 
             if async_render:
@@ -1843,9 +2164,31 @@ class WifiControlCenter(Gtk.Window):
         # Update Active Wi-Fi Disconnect Button Visibility
         self.btn_active_disc.set_visible(bool(active_net))
 
+        self._has_other_networks = bool(other_nets)
+        self._displayed_other_nets = list(other_nets) if self.wifi_enabled else []
+        device_enabling = bool(
+            self.wifi_enabled
+            and not other_nets
+            and self.nm_wifi_dev
+            and self.nm_wifi_dev.get_state() < NM.DeviceState.DISCONNECTED
+        )
+        other_sig = (
+            self.wifi_enabled,
+            bool(self.is_scanning and not other_nets),
+            device_enabling,
+            tuple(
+                (n["ssid"], n["signal"], n["security"], n.get("saved", False), n["ssid"] in self.connecting_ssids)
+                for n in other_nets
+            ),
+        )
+        if other_sig == self._last_other_sig:
+            return
+        self._last_other_sig = other_sig
+
         # Render Other Networks List
         for child in self.other_container.get_children():
             self.other_container.remove(child)
+            child.destroy()
 
         if not self.wifi_enabled:
             empty_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1861,7 +2204,10 @@ class WifiControlCenter(Gtk.Window):
             empty_box.set_halign(Gtk.Align.CENTER)
             empty_box.set_margin_top(12)
             empty_box.set_margin_bottom(12)
-            lbl = Gtk.Label(label="No other networks in range")
+            empty_text = "Enabling Wi-Fi..." if device_enabling else (
+                "Scanning for networks..." if self.is_scanning else "No other networks in range"
+            )
+            lbl = Gtk.Label(label=empty_text)
             lbl.get_style_context().add_class("stat-label")
             empty_box.pack_start(lbl, False, False, 0)
             self.other_container.pack_start(empty_box, False, False, 0)
@@ -1933,6 +2279,14 @@ class WifiControlCenter(Gtk.Window):
     # DNS Provider Management
     # -------------------------------------------------------------
     def get_active_connection_name(self):
+        if self.nm_wifi_dev:
+            try:
+                ac = self.nm_wifi_dev.get_active_connection()
+                if ac:
+                    return ac.get_id()
+                return None
+            except Exception:
+                pass
         try:
             out = subprocess.check_output(
                 ["nmcli", "-t", "-f", "DEVICE,NAME", "connection", "show", "--active"],
@@ -1946,26 +2300,55 @@ class WifiControlCenter(Gtk.Window):
             pass
         return self.active_ssid or None
 
+    def _classify_dns_servers(self, dns_str, default="Custom"):
+        if "1.1.1.1" in dns_str or "1.0.0.1" in dns_str:
+            return "Cloudflare"
+        if "8.8.8.8" in dns_str or "8.8.4.4" in dns_str:
+            return "Google"
+        return default
+
+    def _detect_dns_provider_from_resolv(self):
+        resolv_content = ""
+        if os.path.exists("/etc/resolv.conf"):
+            with open("/etc/resolv.conf", "r") as f:
+                resolv_content = f.read()
+        return self._classify_dns_servers(resolv_content, default=None)
+
     def update_active_dns(self):
+        if self.nm_wifi_dev:
+            ac = self.nm_wifi_dev.get_active_connection()
+            if not ac:
+                self._set_dns_button_active(None)
+                return
+            provider = "DHCP"
+            try:
+                resolv_provider = self._detect_dns_provider_from_resolv()
+                if resolv_provider:
+                    provider = resolv_provider
+                else:
+                    rc = ac.get_connection()
+                    s_ip4 = rc.get_setting_ip4_config() if rc else None
+                    if s_ip4 and s_ip4.get_ignore_auto_dns():
+                        dns_list = [s_ip4.get_dns(i) for i in range(s_ip4.get_num_dns())]
+                        if dns_list:
+                            provider = self._classify_dns_servers(" ".join(dns_list))
+            except Exception:
+                pass
+            self._set_dns_button_active(provider)
+            return
+
         conn_name = self.get_active_connection_name()
         if not conn_name:
-            for b in self.dns_btns.values():
-                b.get_style_context().remove_class("active")
+            self._set_dns_button_active(None)
             return
 
         def dns_worker():
             provider = "DHCP"
             try:
                 # 1. Check /etc/resolv.conf for active resolver IPs
-                resolv_content = ""
-                if os.path.exists("/etc/resolv.conf"):
-                    with open("/etc/resolv.conf", "r") as f:
-                        resolv_content = f.read()
-
-                if "1.1.1.1" in resolv_content or "1.0.0.1" in resolv_content:
-                    provider = "Cloudflare"
-                elif "8.8.8.8" in resolv_content or "8.8.4.4" in resolv_content:
-                    provider = "Google"
+                resolv_provider = self._detect_dns_provider_from_resolv()
+                if resolv_provider:
+                    provider = resolv_provider
                 else:
                     # 2. Check connection profile configuration in NetworkManager
                     ignore_auto = subprocess.check_output(
@@ -1978,12 +2361,7 @@ class WifiControlCenter(Gtk.Window):
                     ).strip()
 
                     if ignore_auto == "yes" and dns_servers:
-                        if "1.1.1.1" in dns_servers or "1.0.0.1" in dns_servers:
-                            provider = "Cloudflare"
-                        elif "8.8.8.8" in dns_servers or "8.8.4.4" in dns_servers:
-                            provider = "Google"
-                        else:
-                            provider = "Custom"
+                        provider = self._classify_dns_servers(dns_servers)
                     else:
                         provider = "DHCP"
             except Exception:
@@ -2371,27 +2749,30 @@ class WifiControlCenter(Gtk.Window):
         card.pack_start(auto_box, False, False, 0)
 
         # Asynchronously fetch current password & autoconnect in background thread
-        def load_secrets_worker():
+        conn_target = ssid
+        initial_autoconnect = "yes"
+        if self.nm_client:
+            for c in self.nm_client.get_connections():
+                s_w = c.get_setting_wireless()
+                if s_w:
+                    sb = s_w.get_ssid()
+                    data = sb.get_data() if sb else None
+                    c_ssid = NM.utils_ssid_to_utf8(data) if data else ""
+                    if c_ssid == ssid or c.get_id() == ssid:
+                        conn_target = c.get_uuid()
+                        s_conn = c.get_setting_connection()
+                        if s_conn:
+                            initial_autoconnect = "yes" if s_conn.get_autoconnect() else "no"
+                        break
+
+        def load_secrets_worker(target_id, autoconnect_default):
             curr_pwd = ""
-            autoconnect = "yes"
-            conn_target = ssid
-            if self.nm_client:
-                for c in self.nm_client.get_connections():
-                    s_w = c.get_setting_wireless()
-                    if s_w:
-                        sb = s_w.get_ssid()
-                        c_ssid = NM.utils_ssid_to_utf8(sb.get_data()) if sb else ""
-                        if c_ssid == ssid or c.get_id() == ssid:
-                            conn_target = c.get_uuid()
-                            s_conn = c.get_setting_connection()
-                            if s_conn:
-                                autoconnect = "yes" if s_conn.get_autoconnect() else "no"
-                            break
+            autoconnect = autoconnect_default
             try:
                 out = subprocess.check_output([
                     "nmcli", "--show-secrets", "-g",
                     "802-11-wireless-security.psk,802-11-wireless-security.wep-key0,connection.autoconnect",
-                    "connection", "show", conn_target
+                    "connection", "show", target_id
                 ], text=True, stderr=subprocess.DEVNULL).strip().splitlines()
                 if len(out) >= 1 and out[0]:
                     curr_pwd = out[0]
@@ -2406,9 +2787,14 @@ class WifiControlCenter(Gtk.Window):
                 if curr_pwd:
                     entry_pwd.set_text(curr_pwd)
                 sw_auto.set_active(autoconnect in ("yes", "true", "1"))
+                return False
             GLib.idle_add(apply_loaded)
 
-        threading.Thread(target=load_secrets_worker, daemon=True).start()
+        threading.Thread(
+            target=load_secrets_worker,
+            args=(conn_target, initial_autoconnect),
+            daemon=True,
+        ).start()
 
         # Buttons Box (Save, Forget, Cancel)
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
