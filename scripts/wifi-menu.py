@@ -7,6 +7,7 @@ A modern, dark-themed Wi-Fi control center built with GTK3 & GtkLayerShell.
 import os
 import sys
 import re
+import fcntl
 import socket
 import threading
 import subprocess
@@ -28,6 +29,127 @@ except Exception:
 from gi.repository import Gtk, Gdk, GLib, GtkLayerShell
 
 SOCKET_PATH = f"/tmp/waybar_wifi_menu_{os.getuid()}.sock"
+AUTO_SWITCH_SOCKET_PATH = f"/tmp/waybar_wifi_autoswitch_{os.getuid()}.sock"
+AUTO_SWITCH_LOCK_PATH = f"/tmp/waybar_wifi_autoswitch_{os.getuid()}.lock"
+STATE_DIR = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+AUTO_SWITCH_STATE_FILE = os.path.join(STATE_DIR, "waybar-wifi-autoswitch")
+
+
+def read_auto_switch_enabled():
+    try:
+        with open(AUTO_SWITCH_STATE_FILE, "r") as f:
+            return f.read().strip().lower() in ("1", "true", "on", "yes")
+    except OSError:
+        return False
+
+
+def write_auto_switch_enabled(enabled):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(AUTO_SWITCH_STATE_FILE, "w") as f:
+            f.write("on\n" if enabled else "off\n")
+    except OSError:
+        pass
+
+
+def send_auto_switch_command(cmd):
+    if not os.path.exists(AUTO_SWITCH_SOCKET_PATH):
+        return False
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(0.4)
+        client.connect(AUTO_SWITCH_SOCKET_PATH)
+        client.sendall((cmd.strip() + "\n").encode())
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
+def is_auto_switcher_running():
+    if not os.path.exists(AUTO_SWITCH_LOCK_PATH):
+        return False
+    try:
+        fd = os.open(AUTO_SWITCH_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
+def ensure_auto_switcher_daemon():
+    if is_auto_switcher_running():
+        send_auto_switch_command("check")
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--auto-switcher-daemon"],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        print(f"Auto switcher daemon launch error: {e}")
+
+
+def find_best_saved_network(nm_client, nm_wifi_dev, exclude_ssids=None):
+    """Return (NM.RemoteConnection, ssid, signal) for the strongest previously connected in-range network."""
+    if not nm_client or not nm_wifi_dev:
+        return None, None, 0
+
+    saved_profiles = {}
+    for conn in nm_client.get_connections():
+        s_wifi = conn.get_setting_wireless()
+        if not s_wifi:
+            continue
+        s_conn = conn.get_setting_connection()
+        if s_conn and not s_conn.get_autoconnect():
+            continue
+        sb = s_wifi.get_ssid()
+        data = sb.get_data() if sb else None
+        ssid = NM.utils_ssid_to_utf8(data) if data else (conn.get_id() or "")
+        if not ssid:
+            continue
+        ts = int(s_conn.get_timestamp()) if s_conn else 0
+        prev = saved_profiles.get(ssid)
+        if prev is None or ts > prev[1]:
+            saved_profiles[ssid] = (conn, ts)
+
+    if not saved_profiles:
+        return None, None, 0
+
+    best_by_ssid = {}
+    for ap in nm_wifi_dev.get_access_points():
+        sb = ap.get_ssid()
+        data = sb.get_data() if sb else None
+        ssid = NM.utils_ssid_to_utf8(data) if data else ""
+        if not ssid or ssid == "--":
+            continue
+        if exclude_ssids and ssid in exclude_ssids:
+            continue
+        if ssid not in saved_profiles:
+            continue
+        sig = int(ap.get_strength())
+        if ssid not in best_by_ssid or sig > best_by_ssid[ssid]:
+            best_by_ssid[ssid] = sig
+
+    best = None
+    for ssid, sig in best_by_ssid.items():
+        conn, ts = saved_profiles[ssid]
+        rank = (1 if ts > 0 else 0, sig, ts)
+        if best is None or rank > best[0]:
+            best = (rank, conn, ssid, sig)
+
+    if best:
+        return best[1], best[2], best[3]
+    return None, None, 0
 
 CSS_STYLE = """
 * {
@@ -214,6 +336,38 @@ switch:checked slider {
     background-color: #212733;
     border-color: #3b4557;
     color: #ffffff;
+}
+
+/* Auto Switcher */
+.auto-switch-btn {
+    background-color: #171b23;
+    border: 1px solid #282f3d;
+    border-radius: 8px;
+    padding: 4px 14px;
+    color: #c5cdd9;
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: all 150ms ease;
+}
+
+.auto-switch-btn:hover {
+    background-color: #212733;
+    border-color: #3b4557;
+    color: #ffffff;
+}
+
+.auto-switch-btn.active {
+    background-color: #1e3a8a;
+    background: #1e3a8a;
+    border: 1px solid #3b82f6;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.auto-switch-btn.active:hover {
+    background-color: #2563eb;
+    background: #2563eb;
+    border-color: #60a5fa;
 }
 
 /* Known Network Card */
@@ -926,21 +1080,25 @@ class WifiControlCenter(Gtk.Window):
         self.active_bssid = ""
         self.wifi_enabled = True
         self.speedtest_running = False
+        self.auto_switcher_enabled = read_auto_switch_enabled()
         self.connecting_ssids = set()
         self.start_time = time.time()
 
         self.init_ui()
         self.apply_css()
+        self._update_auto_switch_ui()
 
         # Immediate fast synchronous initial state load (<25ms)
         self.fetch_fast_initial_data()
 
-        # Trigger non-blocking background scan right after initial render if cache may be stale
+        # Trigger non-blocking background scan right after initial render
         GLib.idle_add(self._maybe_initial_scan)
+        if self.auto_switcher_enabled:
+            GLib.idle_add(lambda: (ensure_auto_switcher_daemon(), False)[1])
 
         # Timers for background updates
         self._poll_stats_id = GLib.timeout_add(1500, self.poll_stats)
-        self._periodic_scan_id = GLib.timeout_add(12000, self._periodic_rescan)
+        self._periodic_scan_id = GLib.timeout_add(6000, self._periodic_rescan)
 
     def on_window_draw(self, widget, cr):
         # 1. Clear fullscreen backdrop to transparent
@@ -1198,6 +1356,22 @@ class WifiControlCenter(Gtk.Window):
         speed_header.pack_end(self.speed_btn, False, False, 0)
         main_box.pack_start(speed_header, False, False, 0)
 
+        # 4.2 Auto Switcher Section
+        autoswitch_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        autoswitch_title = Gtk.Label(label="AUTO SWITCHER", xalign=0)
+        autoswitch_title.get_style_context().add_class("section-title")
+        autoswitch_header.pack_start(autoswitch_title, True, True, 0)
+
+        self.auto_switch_btn = Gtk.Button(label="󰓦  Off")
+        self.auto_switch_btn.get_style_context().add_class("auto-switch-btn")
+        self.auto_switch_btn.set_valign(Gtk.Align.CENTER)
+        self.auto_switch_btn.set_tooltip_text(
+            "Automatically connect to the best previously connected network if a connection is lost"
+        )
+        self.auto_switch_btn.connect("clicked", self.on_auto_switch_clicked)
+        autoswitch_header.pack_end(self.auto_switch_btn, False, False, 0)
+        main_box.pack_start(autoswitch_header, False, False, 0)
+
         # 4.5 Wired Connection Section
         self.wired_title = Gtk.Label(label="WIRED CONNECTION", xalign=0)
         self.wired_title.get_style_context().add_class("section-title")
@@ -1377,13 +1551,41 @@ class WifiControlCenter(Gtk.Window):
                 self._set_scanning_ui(True)
                 self._do_scan_parse(async_render=False)
                 return False
-            last_scan = self.nm_wifi_dev.get_last_scan()
-            now_ms = NM.utils_get_timestamp_msec()
-            if last_scan <= 0 or (now_ms - last_scan) > 3000 or not self._has_other_networks:
+            if not self.is_scanning:
                 self.trigger_rescan()
         else:
             self.trigger_rescan()
         return False
+
+    def _update_auto_switch_ui(self):
+        ctx = self.auto_switch_btn.get_style_context()
+        if self.auto_switcher_enabled:
+            self.auto_switch_btn.set_label("󰓦  Auto Switch: ON")
+            ctx.add_class("active")
+        else:
+            self.auto_switch_btn.set_label("󰓦  Auto Switch: OFF")
+            ctx.remove_class("active")
+
+    def on_auto_switch_clicked(self, widget):
+        self.auto_switcher_enabled = not self.auto_switcher_enabled
+        write_auto_switch_enabled(self.auto_switcher_enabled)
+        self._update_auto_switch_ui()
+
+        if self.auto_switcher_enabled:
+            send_auto_switch_command("resume")
+            ensure_auto_switcher_daemon()
+            # If currently disconnected in the UI right now, also trigger scan/switch immediately
+            if self.wifi_enabled and self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
+                best_conn, best_ssid, _ = find_best_saved_network(self.nm_client, self.nm_wifi_dev)
+                if best_conn:
+                    try:
+                        self.nm_client.activate_connection_async(best_conn, self.nm_wifi_dev, None, None, None, None)
+                    except Exception:
+                        pass
+                elif not self.is_scanning:
+                    self.trigger_rescan()
+        else:
+            send_auto_switch_command("stop")
 
     def _get_ap_security(self, ap):
         try:
@@ -1683,7 +1885,7 @@ class WifiControlCenter(Gtk.Window):
             if rescan and self.wifi_enabled and not self.is_scanning:
                 last_scan = self.nm_wifi_dev.get_last_scan()
                 now_ms = NM.utils_get_timestamp_msec()
-                if last_scan <= 0 or (now_ms - last_scan) >= 10000:
+                if last_scan <= 0 or (now_ms - last_scan) >= 5000:
                     self.trigger_rescan()
                     return False
             self._do_scan_parse(async_render=False)
@@ -1982,6 +2184,8 @@ class WifiControlCenter(Gtk.Window):
         if not self.active_ssid:
             return
         ssid = self.active_ssid
+        if self.auto_switcher_enabled:
+            send_auto_switch_command(f"pause:{ssid}")
         def worker():
             try:
                 subprocess.run(["nmcli", "device", "disconnect", self.wifi_device], check=False)
@@ -2676,11 +2880,15 @@ class WifiControlCenter(Gtk.Window):
         btn_close.get_style_context().add_class("action-btn")
 
         def do_disconnect(w):
+            if self.auto_switcher_enabled:
+                send_auto_switch_command(f"pause:{ssid}")
             subprocess.run(["nmcli", "connection", "down", ssid], check=False)
             self.clear_overlay()
             self.scan_networks()
 
         def do_forget(w):
+            if self.auto_switcher_enabled:
+                send_auto_switch_command(f"pause:{ssid}")
             subprocess.run(["nmcli", "connection", "delete", ssid], check=False)
             self.clear_overlay()
             self.scan_networks()
@@ -2836,6 +3044,8 @@ class WifiControlCenter(Gtk.Window):
 
         def do_forget(w):
             self.clear_overlay()
+            if self.auto_switcher_enabled:
+                send_auto_switch_command(f"pause:{ssid}")
             def worker():
                 subprocess.run(["nmcli", "connection", "delete", ssid], check=False)
                 subprocess.run([
@@ -2863,6 +3073,8 @@ class WifiControlCenter(Gtk.Window):
         ssid = net["ssid"]
         is_saved = net.get("saved", False)
         is_secured = bool(net["security"] and net["security"] != "--")
+        if self.auto_switcher_enabled:
+            send_auto_switch_command("resume")
 
         if is_saved or not is_secured:
             self.connecting_ssids.add(ssid)
@@ -2935,6 +3147,339 @@ class WifiControlCenter(Gtk.Window):
         self.trigger_network_connect(net)
 
 
+class WifiAutoSwitcherDaemon:
+    """Headless background watcher that connects to the strongest saved Wi-Fi on connection loss."""
+
+    IGNORE_REASONS = (
+        {
+            NM.DeviceStateReason.USER_REQUESTED,
+            NM.DeviceStateReason.NEW_ACTIVATION,
+            NM.DeviceStateReason.SLEEPING,
+            NM.DeviceStateReason.NETWORKING_OFF,
+            NM.DeviceStateReason.NOW_UNMANAGED,
+        }
+        if NM_AVAILABLE
+        else set()
+    )
+
+    def __init__(self):
+        self.loop = GLib.MainLoop()
+        self.nm_client = None
+        self.nm_wifi_dev = None
+        self.dev_signals = []
+        self.client_signals = []
+        self.last_connected_ssid = ""
+        self.failed_cooldowns = {}
+        self.manual_pause_until = 0.0
+        self.pending_switch_after_scan = False
+        self.switching_in_progress = False
+        self._lost_connection_pending = False
+        self._ignore_next_disconnect = False
+        self._retry_timer_id = None
+        self._lock_fd = None
+        self._server_sock = None
+
+    def run(self):
+        if not NM_AVAILABLE or not read_auto_switch_enabled():
+            return
+        try:
+            self._lock_fd = os.open(AUTO_SWITCH_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            if self._lock_fd is not None:
+                os.close(self._lock_fd)
+            return
+
+        try:
+            self._init_nm()
+            self._start_socket_server()
+            GLib.idle_add(self._initial_check)
+            self.loop.run()
+        finally:
+            self._cleanup()
+
+    def _cleanup(self):
+        if self._retry_timer_id is not None:
+            GLib.source_remove(self._retry_timer_id)
+            self._retry_timer_id = None
+        for obj, hid in self.dev_signals + self.client_signals:
+            try:
+                obj.disconnect(hid)
+            except Exception:
+                pass
+        self.dev_signals.clear()
+        self.client_signals.clear()
+        if self._server_sock is not None:
+            try:
+                self._server_sock.close()
+            except Exception:
+                pass
+        if os.path.exists(AUTO_SWITCH_SOCKET_PATH):
+            try:
+                os.unlink(AUTO_SWITCH_SOCKET_PATH)
+            except OSError:
+                pass
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                os.close(self._lock_fd)
+            except OSError:
+                pass
+
+    def _init_nm(self):
+        self.nm_client = NM.Client.new(None)
+        self.client_signals = [
+            (self.nm_client, self.nm_client.connect("notify::wireless-enabled", self._on_wireless_enabled)),
+            (self.nm_client, self.nm_client.connect("device-added", self._on_devices_changed)),
+            (self.nm_client, self.nm_client.connect("device-removed", self._on_devices_changed)),
+        ]
+        self._bind_wifi_dev()
+
+    def _bind_wifi_dev(self):
+        for obj, hid in self.dev_signals:
+            try:
+                obj.disconnect(hid)
+            except Exception:
+                pass
+        self.dev_signals.clear()
+        self.nm_wifi_dev = None
+        for d in self.nm_client.get_devices():
+            if isinstance(d, NM.DeviceWifi):
+                self.nm_wifi_dev = d
+                self.dev_signals = [
+                    (d, d.connect("state-changed", self._on_state_changed)),
+                    (d, d.connect("access-point-added", self._on_ap_or_scan)),
+                    (d, d.connect("notify::last-scan", self._on_last_scan)),
+                ]
+                if d.get_state() == NM.DeviceState.ACTIVATED:
+                    self._record_active_ssid(d)
+                break
+
+    def _record_active_ssid(self, dev):
+        ap = dev.get_active_access_point()
+        if ap:
+            sb = ap.get_ssid()
+            data = sb.get_data() if sb else None
+            ssid = NM.utils_ssid_to_utf8(data) if data else ""
+            if ssid and ssid != "--":
+                self.last_connected_ssid = ssid
+                return
+        ac = dev.get_active_connection()
+        if ac and ac.get_id():
+            self.last_connected_ssid = ac.get_id()
+
+    def _on_devices_changed(self, client, dev):
+        self._bind_wifi_dev()
+
+    def _on_wireless_enabled(self, client, pspec):
+        if client.wireless_get_enabled():
+            self.manual_pause_until = 0.0
+            self.pending_switch_after_scan = True
+        else:
+            self.pending_switch_after_scan = False
+            self._lost_connection_pending = False
+
+    def _on_ap_or_scan(self, *args):
+        if self.pending_switch_after_scan and self.nm_wifi_dev:
+            if self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
+                self.try_auto_switch(allow_rescan=False)
+
+    def _on_last_scan(self, dev, pspec):
+        if self.pending_switch_after_scan and dev.get_state() == NM.DeviceState.DISCONNECTED:
+            self.try_auto_switch(allow_rescan=False, allow_cooled_fallback=True)
+
+    def _on_state_changed(self, dev, new_state, old_state, reason):
+        if not read_auto_switch_enabled():
+            self.loop.quit()
+            return
+
+        if new_state == NM.DeviceState.ACTIVATED:
+            self._record_active_ssid(dev)
+            if self.last_connected_ssid:
+                self.failed_cooldowns.pop(self.last_connected_ssid, None)
+            self.pending_switch_after_scan = False
+            self._lost_connection_pending = False
+            self._ignore_next_disconnect = False
+            self.manual_pause_until = 0.0
+            self.switching_in_progress = False
+            return
+
+        if new_state in (NM.DeviceState.PREPARE, NM.DeviceState.CONFIG, NM.DeviceState.NEED_AUTH, NM.DeviceState.IP_CONFIG):
+            self._ignore_next_disconnect = False
+            self._record_active_ssid(dev)
+            return
+
+        if new_state == NM.DeviceState.DEACTIVATING:
+            if reason == NM.DeviceStateReason.USER_REQUESTED:
+                self.manual_pause_until = time.monotonic() + 20.0
+                self._ignore_next_disconnect = True
+            elif reason in self.IGNORE_REASONS:
+                self._ignore_next_disconnect = True
+            return
+
+        if new_state == NM.DeviceState.FAILED:
+            if reason in self.IGNORE_REASONS or self._ignore_next_disconnect:
+                return
+            if self.last_connected_ssid:
+                self.failed_cooldowns[self.last_connected_ssid] = time.monotonic() + 30.0
+            self._lost_connection_pending = True
+            return
+
+        if new_state == NM.DeviceState.DISCONNECTED:
+            if reason == NM.DeviceStateReason.USER_REQUESTED:
+                self.manual_pause_until = time.monotonic() + 20.0
+                self._lost_connection_pending = False
+                self._ignore_next_disconnect = False
+                self.pending_switch_after_scan = False
+                return
+            if reason in self.IGNORE_REASONS or self._ignore_next_disconnect:
+                self._lost_connection_pending = False
+                self._ignore_next_disconnect = False
+                return
+            if self._lost_connection_pending or old_state >= NM.DeviceState.PREPARE:
+                if old_state >= NM.DeviceState.PREPARE and self.last_connected_ssid:
+                    self.failed_cooldowns[self.last_connected_ssid] = time.monotonic() + 30.0
+                self._lost_connection_pending = False
+                self.try_auto_switch(allow_rescan=True)
+
+    def _active_cooldowns(self):
+        now = time.monotonic()
+        expired = [k for k, exp in self.failed_cooldowns.items() if exp <= now]
+        for k in expired:
+            del self.failed_cooldowns[k]
+        return set(self.failed_cooldowns.keys())
+
+    def _initial_check(self):
+        if not read_auto_switch_enabled():
+            self.loop.quit()
+            return False
+        if self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
+            self.try_auto_switch(allow_rescan=True)
+        return False
+
+    def _schedule_retry(self):
+        if self._retry_timer_id is not None:
+            return
+        self._retry_timer_id = GLib.timeout_add(5000, self._on_retry_timer)
+
+    def _on_retry_timer(self):
+        self._retry_timer_id = None
+        if not read_auto_switch_enabled():
+            self.loop.quit()
+            return False
+        if self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
+            self.try_auto_switch(allow_rescan=True, allow_cooled_fallback=True)
+        return False
+
+    def try_auto_switch(self, allow_rescan=True, allow_cooled_fallback=False):
+        if not read_auto_switch_enabled():
+            self.loop.quit()
+            return
+        if self.switching_in_progress or not self.nm_client or not self.nm_wifi_dev:
+            return
+        if not self.nm_client.wireless_get_enabled():
+            return
+        if time.monotonic() < self.manual_pause_until:
+            return
+        if self.nm_wifi_dev.get_state() != NM.DeviceState.DISCONNECTED:
+            return
+
+        cooldowns = self._active_cooldowns()
+        best_conn, best_ssid, best_sig = find_best_saved_network(
+            self.nm_client, self.nm_wifi_dev, exclude_ssids=cooldowns
+        )
+        if not best_conn and allow_cooled_fallback and cooldowns:
+            best_conn, best_ssid, best_sig = find_best_saved_network(
+                self.nm_client, self.nm_wifi_dev, exclude_ssids=None
+            )
+
+        if best_conn:
+            self.pending_switch_after_scan = False
+            self.switching_in_progress = True
+            try:
+                self.nm_client.activate_connection_async(
+                    best_conn, self.nm_wifi_dev, None, None, self._on_activate_done, (best_ssid, best_sig)
+                )
+            except Exception:
+                self.switching_in_progress = False
+                self._schedule_retry()
+        else:
+            self.pending_switch_after_scan = True
+            if allow_rescan:
+                try:
+                    self.nm_wifi_dev.request_scan_options_async(
+                        GLib.Variant("a{sv}", {}), None, lambda d, r, u: None, None
+                    )
+                except Exception:
+                    pass
+            self._schedule_retry()
+
+    def _on_activate_done(self, client, res, info):
+        self.switching_in_progress = False
+        ssid, sig = info
+        try:
+            client.activate_connection_finish(res)
+            subprocess.Popen(
+                [
+                    "notify-send", "-a", "Wi-Fi", "-i", "network-wireless",
+                    "Auto Switcher", f"Connected to '{ssid}' ({sig}%)"
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            self.failed_cooldowns[ssid] = time.monotonic() + 30.0
+            self._schedule_retry()
+
+    def _start_socket_server(self):
+        if os.path.exists(AUTO_SWITCH_SOCKET_PATH):
+            try:
+                os.unlink(AUTO_SWITCH_SOCKET_PATH)
+            except OSError:
+                pass
+        self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server_sock.bind(AUTO_SWITCH_SOCKET_PATH)
+        self._server_sock.listen(5)
+
+        def listen_loop():
+            while True:
+                try:
+                    conn, _ = self._server_sock.accept()
+                    msg = conn.recv(1024).decode().strip()
+                    conn.close()
+                    if msg == "stop":
+                        GLib.idle_add(self.loop.quit)
+                        break
+                    elif msg == "check":
+                        GLib.idle_add(self._handle_check_cmd)
+                    elif msg == "resume":
+                        GLib.idle_add(self._handle_resume_cmd)
+                    elif msg.startswith("pause:"):
+                        ssid = msg.split(":", 1)[1]
+                        GLib.idle_add(self._handle_pause_cmd, ssid)
+                except Exception:
+                    break
+
+        threading.Thread(target=listen_loop, daemon=True).start()
+
+    def _handle_check_cmd(self):
+        self.manual_pause_until = 0.0
+        self.try_auto_switch(allow_rescan=True, allow_cooled_fallback=True)
+        return False
+
+    def _handle_resume_cmd(self):
+        self.manual_pause_until = 0.0
+        return False
+
+    def _handle_pause_cmd(self, ssid):
+        self.manual_pause_until = time.monotonic() + 25.0
+        self.pending_switch_after_scan = False
+        self._lost_connection_pending = False
+        if ssid:
+            self.failed_cooldowns[ssid] = time.monotonic() + 25.0
+        return False
+
+
 def start_ipc_server(win):
     """Listens on a Unix socket for toggle / close signals."""
     if os.path.exists(SOCKET_PATH):
@@ -2980,6 +3525,10 @@ def try_toggle_existing():
 
 
 def main():
+    if "--auto-switcher-daemon" in sys.argv:
+        WifiAutoSwitcherDaemon().run()
+        sys.exit(0)
+
     if try_toggle_existing():
         sys.exit(0)
 

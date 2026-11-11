@@ -12,6 +12,12 @@ fi
 # Ensure Bluetooth is powered off by default on startup
 bluetoothctl power off >/dev/null 2>&1 &
 
+# Restore Wi-Fi Auto Switcher daemon if enabled
+AUTOSWITCH_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/waybar-wifi-autoswitch"
+if [ -f "$AUTOSWITCH_STATE" ] && [ "$(cat "$AUTOSWITCH_STATE")" = "on" ] && [ -f "$CONFIG_DIR/wifi-menu.py" ]; then
+    setsid -f python3 "$CONFIG_DIR/wifi-menu.py" --auto-switcher-daemon >/dev/null 2>&1
+fi
+
 # Stop any running autohide daemon and waybar
 pkill -f "autohide-daemon.py" 2>/dev/null || true
 pkill -x waybar 2>/dev/null || true
