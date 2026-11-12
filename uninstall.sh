@@ -30,6 +30,8 @@ files_to_remove=(
     "$HOME/.config/waybar/brightness-menu.py"
     "$HOME/.config/waybar/bt-agent.py"
     "$HOME/.config/waybar/battery.py"
+    "$HOME/.config/waybar/power-menu.sh"
+    "$HOME/.config/waybar/power-menu.py"
     "$HOME/.config/waybar/power-profile-toggle.sh"
     "$HOME/.config/waybar/toggle-mode.sh"
     "$HOME/.config/waybar/toggle-visibility.sh"

@@ -155,7 +155,8 @@
     "return-type": "json",
     "interval": 2,
     "signal": 8,
-    "on-click": "~/.config/waybar/power-profile-toggle.sh",
+    "on-click": "~/.config/waybar/power-menu.sh",
+    "on-click-right": "~/.config/waybar/power-profile-toggle.sh",
     "tooltip": true
   },
 

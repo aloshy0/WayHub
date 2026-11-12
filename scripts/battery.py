@@ -201,7 +201,12 @@ def get_battery_info():
     else:
         bat_detail = f"{cap}% ({status})"
 
-    tooltip = f"Battery: {bat_detail}\nPower Profile: {profile_display}"
+    tooltip = (
+        f"Battery: {bat_detail}\n"
+        f"Power Profile: {profile_display}\n"
+        f"Click: power profile selector\n"
+        f"Right-click: toggle Eco mode"
+    )
 
     return json.dumps({
         "text": text,
