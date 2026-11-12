@@ -12,6 +12,14 @@ fi
 # Ensure Bluetooth is powered off by default on startup
 bluetoothctl power off >/dev/null 2>&1 &
 
+# Ensure clipboard history watchers stay running
+if command -v wl-paste >/dev/null 2>&1 && command -v cliphist >/dev/null 2>&1; then
+    pgrep -u "$(id -u)" -f "wl-paste --type text --watch cliphist store" >/dev/null 2>&1 || \
+        setsid -f wl-paste --type text --watch cliphist store >/dev/null 2>&1
+    pgrep -u "$(id -u)" -f "wl-paste --type image --watch cliphist store" >/dev/null 2>&1 || \
+        setsid -f wl-paste --type image --watch cliphist store >/dev/null 2>&1
+fi
+
 # Restore Wi-Fi Auto Switcher daemon if enabled
 AUTOSWITCH_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/waybar-wifi-autoswitch"
 if [ -f "$AUTOSWITCH_STATE" ] && [ "$(cat "$AUTOSWITCH_STATE")" = "on" ] && [ -f "$CONFIG_DIR/wifi-menu.py" ]; then

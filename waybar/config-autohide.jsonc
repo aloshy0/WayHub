@@ -83,6 +83,7 @@
   "group/system": {
     "orientation": "horizontal",
     "modules": [
+      "custom/clipboard",
       "backlight",
       "network",
       "bluetooth",
@@ -91,6 +92,13 @@
       "cpu",
       "memory"
     ]
+  },
+
+  "custom/clipboard": {
+    "format": "󰅌",
+    "on-click": "~/.config/waybar/clipboard-menu.sh",
+    "tooltip": true,
+    "tooltip-format": "Clipboard History\nClick: search & paste (Super+H)"
   },
 
   "backlight": {

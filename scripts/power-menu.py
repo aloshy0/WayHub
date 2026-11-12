@@ -110,6 +110,77 @@ window {
     letter-spacing: 1.4px;
 }
 
+.hz-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: #55e6a5;
+}
+
+.hz-value.hz-60 {
+    color: #cbd5e1;
+}
+
+.hz-value.hz-locked {
+    color: #ff9f43;
+}
+
+.hz-caption {
+    font-size: 8.5px;
+    font-weight: 700;
+    color: #7d8799;
+    letter-spacing: 1.1px;
+}
+
+.hz-caption.hz-locked {
+    color: #ff9f43;
+}
+
+switch,
+switch trough {
+    background-color: #1e252f;
+    border: 1px solid #3a4758;
+    border-radius: 16px;
+    min-width: 44px;
+    min-height: 22px;
+    padding: 2px;
+    color: transparent;
+    font-size: 0px;
+    text-shadow: none;
+    outline: none;
+    box-shadow: none;
+}
+
+switch:checked,
+switch:checked trough {
+    background-color: #203b35;
+    border-color: #55e6a5;
+}
+
+switch slider {
+    background-color: #cbd5e1;
+    border-radius: 50%;
+    min-width: 18px;
+    min-height: 18px;
+    margin: 1px;
+    border: none;
+    box-shadow: none;
+}
+
+switch:checked slider {
+    background-color: #55e6a5;
+}
+
+switch:disabled,
+switch:disabled trough {
+    background-color: #192029;
+    border-color: #2a3340;
+    opacity: 0.45;
+}
+
+switch:disabled slider {
+    background-color: #64748b;
+}
+
 .divider {
     background-color: #2c3645;
     min-height: 1px;
@@ -166,11 +237,21 @@ window {
     color: #8492a6;
 }
 
-.profile-badge {
-    font-size: 11px;
+.profile-eta {
+    font-size: 12.5px;
     font-weight: 700;
-    color: transparent;
-    min-width: 18px;
+    color: #cbd5e1;
+}
+
+.profile-meta {
+    font-size: 10px;
+    font-weight: 600;
+    color: #7d8799;
+}
+
+.profile-btn:disabled .profile-name,
+.profile-btn:disabled .profile-eta {
+    color: #566173;
 }
 
 .profile-btn.active-power-saver {
@@ -179,7 +260,7 @@ window {
 }
 
 .profile-btn.active-power-saver .profile-icon,
-.profile-btn.active-power-saver .profile-badge {
+.profile-btn.active-power-saver .profile-eta {
     color: #ff9f43;
 }
 
@@ -193,7 +274,7 @@ window {
 }
 
 .profile-btn.active-balanced .profile-icon,
-.profile-btn.active-balanced .profile-badge {
+.profile-btn.active-balanced .profile-eta {
     color: #55e6a5;
 }
 
@@ -207,7 +288,7 @@ window {
 }
 
 .profile-btn.active-performance .profile-icon,
-.profile-btn.active-performance .profile-badge {
+.profile-btn.active-performance .profile-eta {
     color: #ff5c5c;
 }
 
@@ -253,10 +334,18 @@ class PowerControlCenter(Gtk.Window):
         self.connect("key-press-event", self.on_key_press)
         self.connect("destroy", Gtk.main_quit)
 
+        self.updating_ui = False
         self.active_profile = "balanced"
         self.current_cap = None
+        self.current_energy_wh = None
+        self.current_hz = 144
+        self.last_base_compute_w = battery_helper.DEFAULT_BASE_COMPUTE_W
+        self.last_live_watts = None
+        self.last_is_discharging = False
         self.pending_profile = None
         self.pending_until = 0.0
+        self.pending_hz = None
+        self.pending_hz_until = 0.0
         self.profile_widgets = {}
 
         self.init_ui()
@@ -337,7 +426,7 @@ class PowerControlCenter(Gtk.Window):
         self.card.set_valign(Gtk.Align.START)
         self.card.set_margin_top(38)
         self.card.set_margin_end(12)
-        self.card.set_size_request(365, -1)
+        self.card.set_size_request(420, -1)
         align_box.pack_start(self.card, False, False, 0)
 
         # Header
@@ -359,6 +448,26 @@ class PowerControlCenter(Gtk.Window):
         title_box.pack_start(self.lbl_title, False, False, 0)
         title_box.pack_start(self.lbl_subtitle, False, False, 0)
         header_box.pack_start(title_box, True, True, 0)
+
+        # Refresh Rate Switcher (right side of header)
+        hz_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        hz_box.set_valign(Gtk.Align.CENTER)
+        hz_label_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        hz_label_box.set_valign(Gtk.Align.CENTER)
+        self.lbl_hz = Gtk.Label(label="144 Hz", xalign=1)
+        self.lbl_hz.get_style_context().add_class("hz-value")
+        self.lbl_hz_sub = Gtk.Label(label="MAX RATE", xalign=1)
+        self.lbl_hz_sub.get_style_context().add_class("hz-caption")
+        hz_label_box.pack_start(self.lbl_hz, False, False, 0)
+        hz_label_box.pack_start(self.lbl_hz_sub, False, False, 0)
+        hz_box.pack_start(hz_label_box, False, False, 0)
+
+        self.hz_switch = Gtk.Switch()
+        self.hz_switch.set_valign(Gtk.Align.CENTER)
+        self.hz_switch.set_active(True)
+        self.hz_switch.connect("state-set", self.on_hz_switch_toggled)
+        hz_box.pack_start(self.hz_switch, False, False, 0)
+        header_box.pack_start(hz_box, False, False, 0)
 
         div = Gtk.Box()
         div.get_style_context().add_class("divider")
@@ -392,14 +501,19 @@ class PowerControlCenter(Gtk.Window):
             text_box.pack_start(desc_lbl, False, False, 0)
             row.pack_start(text_box, True, True, 0)
 
-            badge_lbl = Gtk.Label(label="●", xalign=1)
-            badge_lbl.get_style_context().add_class("profile-badge")
-            badge_lbl.set_valign(Gtk.Align.CENTER)
-            row.pack_start(badge_lbl, False, False, 0)
+            right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            right_box.set_valign(Gtk.Align.CENTER)
+            eta_lbl = Gtk.Label(label="--", xalign=1)
+            eta_lbl.get_style_context().add_class("profile-eta")
+            meta_lbl = Gtk.Label(label="", xalign=1)
+            meta_lbl.get_style_context().add_class("profile-meta")
+            right_box.pack_start(eta_lbl, False, False, 0)
+            right_box.pack_start(meta_lbl, False, False, 0)
+            row.pack_start(right_box, False, False, 0)
 
             btn.add(row)
             profiles_box.pack_start(btn, False, False, 0)
-            self.profile_widgets[prof["id"]] = (btn, desc_lbl, badge_lbl, prof["desc"])
+            self.profile_widgets[prof["id"]] = (btn, desc_lbl, eta_lbl, meta_lbl, prof["desc"])
 
         self.lbl_footer = Gtk.Label(label="", xalign=0)
         self.lbl_footer.get_style_context().add_class("footer-stats")
@@ -411,15 +525,81 @@ class PowerControlCenter(Gtk.Window):
 
         self.pending_profile = profile_id
         self.pending_until = time.monotonic() + 2.0
+        target_hz = (
+            60
+            if (profile_id == "power-saver" or not battery_helper.is_high_refresh_allowed(self.current_cap))
+            else 144
+        )
+        self.pending_hz = target_hz
+        self.pending_hz_until = time.monotonic() + 2.0
         self.apply_profile_visuals(profile_id)
+        self.apply_hz_visuals(target_hz)
 
         def worker():
             ok = set_system_power_profile(profile_id)
             if not ok:
                 self.pending_profile = None
+                self.pending_hz = None
             GLib.idle_add(self.refresh_state)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def on_hz_switch_toggled(self, switch, state):
+        if self.updating_ui:
+            return False
+
+        target_hz = 144 if state else 60
+        if target_hz > 60 and not battery_helper.is_high_refresh_allowed(self.current_cap):
+            self.updating_ui = True
+            switch.set_active(False)
+            self.updating_ui = False
+            self.apply_hz_visuals(60)
+            return True
+
+        self.pending_hz = target_hz
+        self.pending_hz_until = time.monotonic() + 2.0
+        self.apply_hz_visuals(target_hz)
+
+        def worker():
+            ok = battery_helper.set_manual_refresh_rate(
+                target_hz, notify_waybar=True, cap=self.current_cap
+            )
+            if not ok:
+                self.pending_hz = None
+            GLib.idle_add(self.refresh_state)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return False
+
+    def apply_hz_visuals(self, refresh_hz):
+        hz_allowed = battery_helper.is_high_refresh_allowed(self.current_cap)
+        val_ctx = self.lbl_hz.get_style_context()
+        sub_ctx = self.lbl_hz_sub.get_style_context()
+        for ctx in (val_ctx, sub_ctx):
+            ctx.remove_class("hz-60")
+            ctx.remove_class("hz-locked")
+
+        self.updating_ui = True
+        if not hz_allowed:
+            self.current_hz = 60
+            self.hz_switch.set_sensitive(False)
+            self.hz_switch.set_active(False)
+            self.lbl_hz.set_label("60 Hz 󰌾")
+            self.lbl_hz_sub.set_label(f"LOCKED <{battery_helper.REFRESH_LOCK_THRESHOLD}%")
+            val_ctx.add_class("hz-locked")
+            sub_ctx.add_class("hz-locked")
+        else:
+            self.hz_switch.set_sensitive(True)
+            is_high = refresh_hz is not None and refresh_hz > 75
+            hz_display = refresh_hz if refresh_hz else (144 if is_high else 60)
+            self.current_hz = hz_display
+            self.hz_switch.set_active(is_high)
+            self.lbl_hz.set_label(f"{hz_display} Hz")
+            self.lbl_hz_sub.set_label("MAX RATE" if is_high else "POWER SAVE")
+            if not is_high:
+                val_ctx.add_class("hz-60")
+        self.updating_ui = False
+        self.update_prediction_labels()
 
     def apply_profile_visuals(self, profile_id):
         self.active_profile = profile_id
@@ -431,24 +611,47 @@ class PowerControlCenter(Gtk.Window):
             header_ctx.add_class(profile_id)
 
         perf_allowed = battery_helper.is_performance_allowed(self.current_cap)
-        for pid, (btn, desc_lbl, badge, default_desc) in self.profile_widgets.items():
+        for pid, (btn, desc_lbl, _eta_lbl, _meta_lbl, default_desc) in self.profile_widgets.items():
             ctx = btn.get_style_context()
             active_cls = f"active-{pid}"
             if pid == "performance" and not perf_allowed:
                 btn.set_sensitive(False)
                 desc_lbl.set_label(f"Unavailable below {battery_helper.PERFORMANCE_MIN_CHARGE}% battery")
                 ctx.remove_class(active_cls)
-                badge.set_label("")
                 continue
 
             btn.set_sensitive(True)
             desc_lbl.set_label(default_desc)
             if pid == profile_id:
                 ctx.add_class(active_cls)
-                badge.set_label("ACTIVE")
             else:
                 ctx.remove_class(active_cls)
-                badge.set_label("")
+
+        self.update_prediction_labels()
+
+    def update_prediction_labels(self):
+        preds = battery_helper.compute_mode_predictions(
+            self.last_base_compute_w,
+            self.active_profile,
+            self.current_hz,
+            self.current_cap,
+            self.current_energy_wh,
+        )
+        perf_allowed = battery_helper.is_performance_allowed(self.current_cap)
+        for pid, (_btn, _desc_lbl, eta_lbl, meta_lbl, _default_desc) in self.profile_widgets.items():
+            if pid == "performance" and not perf_allowed:
+                eta_lbl.set_label("--")
+                meta_lbl.set_label(f"LOCKED <{battery_helper.PERFORMANCE_MIN_CHARGE}%")
+                continue
+            pred = preds.get(pid)
+            if not pred:
+                eta_lbl.set_label("--")
+                meta_lbl.set_label("")
+                continue
+            eta_str = pred.get("eta")
+            eta_lbl.set_label(eta_str if eta_str and eta_str != "N/A" else "--")
+            active_prefix = "ACTIVE • " if pid == self.active_profile else ""
+            meta_lbl.set_label(f"{active_prefix}{pred['watts']:.1f} W • {pred['hz']} Hz")
 
     def _on_poll_timer(self):
         self.refresh_state()
@@ -459,6 +662,9 @@ class PowerControlCenter(Gtk.Window):
             status, cap, estimated, energy_now, energy_full, cycles = battery_helper.read_battery_summary()
             profile = battery_helper.get_power_profile()
             refresh_hz = battery_helper.get_current_refresh_hz()
+            estimates = battery_helper.estimate_mode_runtimes(
+                profile, refresh_hz, cap=cap, energy_now=energy_now, persist=False
+            )
             GLib.idle_add(
                 self.update_ui,
                 profile,
@@ -469,13 +675,21 @@ class PowerControlCenter(Gtk.Window):
                 energy_full,
                 cycles,
                 refresh_hz,
+                estimates,
             )
 
         threading.Thread(target=worker, daemon=True).start()
         return False
 
-    def update_ui(self, profile, cap, estimated, status, energy_now, energy_full, cycles, refresh_hz):
+    def update_ui(self, profile, cap, estimated, status, energy_now, energy_full, cycles, refresh_hz, estimates=None):
         self.current_cap = cap
+        if estimates:
+            self.last_base_compute_w = estimates["base_compute_w"]
+            self.last_live_watts = estimates["live_watts"]
+            self.last_is_discharging = estimates["is_discharging"]
+            self.current_energy_wh = estimates["energy_wh"]
+        elif energy_now is not None:
+            self.current_energy_wh = energy_now / 1_000_000
         icons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
         if status == "Charging":
             self.header_icon.set_label("󰂄")
@@ -490,6 +704,10 @@ class PowerControlCenter(Gtk.Window):
         footer_parts = []
         if energy_now is not None and energy_full:
             footer_parts.append(f"{energy_now / 1_000_000:.1f} / {energy_full / 1_000_000:.1f} Wh")
+        if self.last_is_discharging and self.last_live_watts is not None:
+            footer_parts.append(f"{self.last_live_watts:.1f} W live")
+        else:
+            footer_parts.append(f"~{self.last_base_compute_w:.1f} W strategy")
         if cycles is not None and cycles > 0:
             footer_parts.append(f"{cycles} cycles")
         if refresh_hz:
@@ -506,6 +724,15 @@ class PowerControlCenter(Gtk.Window):
         if profile == self.pending_profile:
             self.pending_profile = None
         self.apply_profile_visuals(effective_profile)
+
+        effective_hz = (
+            self.pending_hz
+            if self.pending_hz and now < self.pending_hz_until
+            else refresh_hz
+        )
+        if refresh_hz is not None and self.pending_hz is not None and abs(refresh_hz - self.pending_hz) <= 1:
+            self.pending_hz = None
+        self.apply_hz_visuals(effective_hz)
         return False
 
 

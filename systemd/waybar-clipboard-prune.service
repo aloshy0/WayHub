@@ -1,0 +1,7 @@
+[Unit]
+Description=Prune expired Waybar clipboard history entries (older than 24h)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.config/waybar/clipboard-menu.py --prune
+

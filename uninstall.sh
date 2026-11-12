@@ -37,6 +37,10 @@ files_to_remove=(
     "$HOME/.config/waybar/toggle-visibility.sh"
     "$HOME/.config/waybar/launch.sh"
     "$HOME/.config/waybar/autohide-daemon.py"
+    "$HOME/.config/waybar/clipboard-menu.sh"
+    "$HOME/.config/waybar/clipboard-menu.py"
+    "$HOME/.config/systemd/user/waybar-clipboard-prune.service"
+    "$HOME/.config/systemd/user/waybar-clipboard-prune.timer"
     "$HOME/.config/wofi/config"
     "$HOME/.config/wofi/style.css"
 )

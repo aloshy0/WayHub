@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically prune clipboard history entries after 24 hours
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

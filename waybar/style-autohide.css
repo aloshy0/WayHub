@@ -22,6 +22,7 @@ window#waybar {
 #group-system,
 #clock,
 #window,
+#custom-clipboard,
 #network,
 #bluetooth,
 #pulseaudio,
@@ -38,6 +39,7 @@ window#waybar {
    RIGHT SIDE SYSTEM PILLS
    ========================= */
 
+#custom-clipboard,
 #network,
 #bluetooth,
 #pulseaudio,
@@ -52,6 +54,7 @@ window#waybar {
 }
 
 /* Keep the icons centered */
+#custom-clipboard,
 #network,
 #bluetooth,
 #pulseaudio {
@@ -70,6 +73,10 @@ window#waybar {
 /* =========================
    COLORS
    ========================= */
+
+#custom-clipboard {
+    color: #67e8f9;
+}
 
 #network {
     color: #cdd6f4;
@@ -249,6 +256,11 @@ window#waybar {
 #network:hover {
     background: rgba(30, 30, 40, 0.95);
     border-color: #25a7ff;
+}
+
+#custom-clipboard:hover {
+    background: rgba(30, 30, 40, 0.95);
+    border-color: #67e8f9;
 }
 
 #network.disconnected {

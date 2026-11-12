@@ -7,6 +7,7 @@ A modern, dark-themed Wi-Fi control center built with GTK3 & GtkLayerShell.
 import os
 import sys
 import re
+import json
 import fcntl
 import socket
 import threading
@@ -33,6 +34,20 @@ AUTO_SWITCH_SOCKET_PATH = f"/tmp/waybar_wifi_autoswitch_{os.getuid()}.sock"
 AUTO_SWITCH_LOCK_PATH = f"/tmp/waybar_wifi_autoswitch_{os.getuid()}.lock"
 STATE_DIR = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
 AUTO_SWITCH_STATE_FILE = os.path.join(STATE_DIR, "waybar-wifi-autoswitch")
+WIFI_QUALITY_STATE_FILE = os.path.join(STATE_DIR, "waybar-wifi-quality.json")
+
+QUALITY_HISTORY_TTL = 7 * 24 * 3600
+PROACTIVE_PASSIVE_MARGIN = 18.0
+PROACTIVE_LIVE_MARGIN = 5.0
+HEALTH_CHECK_INTERVAL_SEC = 20
+REJECTED_COOLDOWN_SEC = 300.0
+FAILED_COOLDOWN_SEC = 180.0
+MANUAL_CONNECT_GRACE_SEC = 120.0
+POST_SWITCH_SETTLE_SEC = 1.5
+TRIAL_CONNECT_TIMEOUT_SEC = 18
+HEALTH_PING_BAD_MS = 200.0
+HEALTH_LOSS_BAD_PCT = 20.0
+HEALTH_SIGNAL_BAD_PCT = 28
 
 
 def read_auto_switch_enabled():
@@ -99,10 +114,254 @@ def ensure_auto_switcher_daemon():
         print(f"Auto switcher daemon launch error: {e}")
 
 
-def find_best_saved_network(nm_client, nm_wifi_dev, exclude_ssids=None):
-    """Return (NM.RemoteConnection, ssid, signal) for the strongest previously connected in-range network."""
+def _get_ap_ssid(ap):
+    if not ap:
+        return ""
+    sb = ap.get_ssid()
+    data = sb.get_data() if sb else None
+    ssid = NM.utils_ssid_to_utf8(data) if data else ""
+    return "" if (not ssid or ssid == "--") else ssid
+
+
+def load_wifi_quality_cache():
+    try:
+        with open(WIFI_QUALITY_STATE_FILE, "r") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_wifi_quality_cache(cache):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp_path = f"{WIFI_QUALITY_STATE_FILE}.tmp.{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            json.dump(cache, f, indent=2)
+        os.replace(tmp_path, WIFI_QUALITY_STATE_FILE)
+    except OSError:
+        pass
+
+
+def record_ssid_quality(ssid, **fields):
+    if not ssid:
+        return
+    cache = load_wifi_quality_cache()
+    entry = dict(cache.get(ssid) or {})
+    for key, val in fields.items():
+        if val is not None:
+            entry[key] = val
+    entry["updated_ts"] = int(time.time())
+    cache[ssid] = entry
+    save_wifi_quality_cache(cache)
+
+
+def compute_passive_ap_score(signal, max_mbps=0.0, freq_mhz=0, cached=None, now_ts=None):
+    """Estimate network quality from beacon/scan RF info and cached past measurements."""
+    score = (
+        float(signal or 0) * 0.65
+        + min(float(max_mbps or 0.0), 600.0) * 0.12
+        + (14.0 if (freq_mhz or 0) >= 4900 else 0.0)
+    )
+    if cached:
+        updated_ts = cached.get("updated_ts") or 0
+        age = (now_ts if now_ts is not None else time.time()) - updated_ts
+        if 0 <= age <= QUALITY_HISTORY_TTL:
+            if cached.get("internet_ok") is False:
+                score -= 250.0
+            elif cached.get("internet_ok") is True:
+                score += 20.0
+            loss = cached.get("loss_pct")
+            if isinstance(loss, (int, float)):
+                score -= min(max(float(loss), 0.0), 100.0) * 3.0
+            ping_ms = cached.get("ping_ms")
+            if isinstance(ping_ms, (int, float)):
+                score += max(-40.0, 25.0 - float(ping_ms) * 0.25)
+            down_mbps = cached.get("down_mbps")
+            if isinstance(down_mbps, (int, float)):
+                score += min(max(float(down_mbps), 0.0), 300.0) * 0.15
+    return round(score, 2)
+
+
+def compute_live_network_score(metrics):
+    """Score an active connection from real internet health, latency, loss, speed, and RF link."""
+    internet_ok = bool(metrics.get("internet_ok"))
+    loss_pct = float(metrics.get("loss_pct") if metrics.get("loss_pct") is not None else 100.0)
+    ping_ms = metrics.get("ping_ms")
+    signal = float(metrics.get("signal") or 0)
+    max_mbps = float(metrics.get("max_mbps") or 0.0)
+    freq = int(metrics.get("freq") or 0)
+    down_mbps = metrics.get("down_mbps")
+
+    score = 1000.0 if internet_ok else -1000.0
+    score -= min(max(loss_pct, 0.0), 100.0) * 8.0
+    if isinstance(ping_ms, (int, float)):
+        score += max(-150.0, 80.0 - float(ping_ms) * 0.6)
+    elif not internet_ok:
+        score -= 80.0
+    score += signal * 0.5 + min(max_mbps, 600.0) * 0.08 + (12.0 if freq >= 4900 else 0.0)
+    if isinstance(down_mbps, (int, float)):
+        score += min(max(float(down_mbps), 0.0), 300.0) * 0.25
+    return round(score, 2)
+
+
+def classify_network_health(metrics):
+    """Return a short reason string if the current network is degraded, or None if healthy."""
+    if not metrics.get("internet_ok"):
+        return "No internet access"
+    loss_pct = float(metrics.get("loss_pct") or 0.0)
+    if loss_pct >= HEALTH_LOSS_BAD_PCT:
+        return f"{int(round(loss_pct))}% packet loss"
+    ping_ms = metrics.get("ping_ms")
+    if isinstance(ping_ms, (int, float)) and ping_ms >= HEALTH_PING_BAD_MS:
+        return f"High latency ({int(round(ping_ms))} ms)"
+    signal = metrics.get("signal")
+    if isinstance(signal, (int, float)) and 0 < signal <= HEALTH_SIGNAL_BAD_PCT:
+        return f"Weak signal ({int(signal)}%)"
+    return None
+
+
+def _run_ping_probe(target):
+    """Run a fast 3-packet ICMP probe and return (loss_pct, avg_ping_ms)."""
+    try:
+        proc = subprocess.run(
+            ["ping", "-n", "-c", "3", "-i", "0.2", "-W", "1", target],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        out = proc.stdout or ""
+        m_loss = re.search(r"([0-9.]+)%\s+packet loss", out)
+        loss_pct = float(m_loss.group(1)) if m_loss else (0.0 if proc.returncode == 0 else 100.0)
+        m_rtt = re.search(r"(?:rtt|round-trip) min/avg/max[^=]*=\s*[0-9.]+/([0-9.]+)/", out)
+        ping_ms = float(m_rtt.group(1)) if m_rtt else None
+        if ping_ms is None:
+            times = [float(x) for x in re.findall(r"time=([0-9.]+)\s*ms", out)]
+            if times:
+                ping_ms = sum(times) / len(times)
+        return loss_pct, ping_ms
+    except Exception:
+        return 100.0, None
+
+
+def _run_http_connectivity_probe():
+    """Verify real HTTP internet reachability without captive portal interception."""
+    try:
+        proc = subprocess.run(
+            [
+                "curl", "-s", "-L", "--max-time", "2.5",
+                "-o", "/dev/null", "-w", "%{http_code}",
+                "http://connectivitycheck.gstatic.com/generate_204",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        return proc.returncode == 0 and proc.stdout.strip() == "204"
+    except Exception:
+        return False
+
+
+def _run_quick_speed_probe():
+    """Measure short download throughput in Mbps (bounded ~1 MB / 1.5s)."""
+    try:
+        proc = subprocess.run(
+            [
+                "curl", "-s", "--max-time", "1.5",
+                "-w", "%{speed_download}", "-o", "/dev/null",
+                "https://speed.cloudflare.com/__down?bytes=1048576",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            bps = float(proc.stdout.strip())
+            if bps > 0:
+                return round((bps * 8.0) / (1000.0 * 1000.0), 2)
+    except Exception:
+        pass
+    return None
+
+
+def measure_live_network_quality(signal=0, max_mbps=0.0, freq=0, cached_down_mbps=None, include_speed=False):
+    """Measure live internet reachability, packet loss, latency, optional speed, and compute score."""
+    loss_pct, ping_ms = _run_ping_probe("1.1.1.1")
+    if loss_pct >= 100.0:
+        loss2, ping2 = _run_ping_probe("8.8.8.8")
+        if loss2 < loss_pct:
+            loss_pct, ping_ms = loss2, ping2
+
+    http_ok = _run_http_connectivity_probe()
+    internet_ok = bool(http_ok or (loss_pct < 100.0 and ping_ms is not None))
+    if http_ok and ping_ms is None and loss_pct >= 100.0:
+        loss_pct = 0.0
+
+    down_mbps = cached_down_mbps
+    if include_speed and internet_ok:
+        measured = _run_quick_speed_probe()
+        if measured is not None:
+            down_mbps = measured
+
+    metrics = {
+        "internet_ok": internet_ok,
+        "http_ok": http_ok,
+        "loss_pct": round(loss_pct, 1),
+        "ping_ms": round(ping_ms, 1) if ping_ms is not None else None,
+        "signal": int(signal or 0),
+        "max_mbps": round(float(max_mbps or 0.0), 1),
+        "freq": int(freq or 0),
+        "down_mbps": down_mbps,
+    }
+    metrics["score"] = compute_live_network_score(metrics)
+    metrics["bad_reason"] = classify_network_health(metrics)
+    return metrics
+
+
+def format_comparison_summary(cand_metrics, prev_metrics):
+    parts = []
+    cp = cand_metrics.get("ping_ms")
+    pp = prev_metrics.get("ping_ms")
+    if isinstance(cp, (int, float)) and isinstance(pp, (int, float)):
+        parts.append(f"{int(round(cp))}ms vs {int(round(pp))}ms")
+    cd = cand_metrics.get("down_mbps")
+    pd = prev_metrics.get("down_mbps")
+    if isinstance(cd, (int, float)) and isinstance(pd, (int, float)):
+        parts.append(f"{cd:.1f} vs {pd:.1f} Mbps")
+    if not parts:
+        parts.append(f"score {cand_metrics.get('score', 0):.0f} vs {prev_metrics.get('score', 0):.0f}")
+    return ", ".join(parts)
+
+
+def is_candidate_better(cand_metrics, prev_metrics, proactive=False):
+    """Compare candidate vs previous live metrics; return (is_better, detail_summary)."""
+    cand_ok = bool(cand_metrics.get("internet_ok"))
+    prev_ok = bool(prev_metrics.get("internet_ok"))
+    if not cand_ok:
+        return False, "no internet access"
+    if not prev_ok:
+        return True, "internet restored"
+
+    cand_loss = float(cand_metrics.get("loss_pct") or 0.0)
+    prev_loss = float(prev_metrics.get("loss_pct") or 0.0)
+    if cand_loss >= HEALTH_LOSS_BAD_PCT and cand_loss > prev_loss + 5.0:
+        return False, f"{int(round(cand_loss))}% packet loss"
+
+    margin = PROACTIVE_LIVE_MARGIN if proactive else 0.01
+    better = float(cand_metrics.get("score") or 0.0) >= float(prev_metrics.get("score") or 0.0) + margin
+    return better, format_comparison_summary(cand_metrics, prev_metrics)
+
+
+def find_best_saved_candidate(
+    nm_client,
+    nm_wifi_dev,
+    exclude_ssids=None,
+    require_previously_connected=False,
+    quality_cache=None,
+):
+    """Return (NM.RemoteConnection, ssid, signal, passive_score) for the highest-scoring in-range saved network."""
     if not nm_client or not nm_wifi_dev:
-        return None, None, 0
+        return None, None, 0, -9999.0
 
     saved_profiles = {}
     for conn in nm_client.get_connections():
@@ -118,38 +377,52 @@ def find_best_saved_network(nm_client, nm_wifi_dev, exclude_ssids=None):
         if not ssid:
             continue
         ts = int(s_conn.get_timestamp()) if s_conn else 0
+        if require_previously_connected and ts <= 0:
+            continue
         prev = saved_profiles.get(ssid)
         if prev is None or ts > prev[1]:
             saved_profiles[ssid] = (conn, ts)
 
     if not saved_profiles:
-        return None, None, 0
+        return None, None, 0, -9999.0
 
-    best_by_ssid = {}
+    cache = quality_cache if quality_cache is not None else load_wifi_quality_cache()
+    now_ts = time.time()
+    best_ap_by_ssid = {}
     for ap in nm_wifi_dev.get_access_points():
-        sb = ap.get_ssid()
-        data = sb.get_data() if sb else None
-        ssid = NM.utils_ssid_to_utf8(data) if data else ""
-        if not ssid or ssid == "--":
+        ssid = _get_ap_ssid(ap)
+        if not ssid or ssid not in saved_profiles:
             continue
         if exclude_ssids and ssid in exclude_ssids:
             continue
-        if ssid not in saved_profiles:
-            continue
         sig = int(ap.get_strength())
-        if ssid not in best_by_ssid or sig > best_by_ssid[ssid]:
-            best_by_ssid[ssid] = sig
+        max_mbps = float(ap.get_max_bitrate() or 0) / 1000.0
+        freq = int(ap.get_frequency() or 0)
+        ap_score = compute_passive_ap_score(
+            sig, max_mbps=max_mbps, freq_mhz=freq, cached=cache.get(ssid), now_ts=now_ts
+        )
+        prev_ap = best_ap_by_ssid.get(ssid)
+        if prev_ap is None or (ap_score, sig) > (prev_ap[1], prev_ap[0]):
+            best_ap_by_ssid[ssid] = (sig, ap_score)
 
     best = None
-    for ssid, sig in best_by_ssid.items():
+    for ssid, (sig, ap_score) in best_ap_by_ssid.items():
         conn, ts = saved_profiles[ssid]
-        rank = (1 if ts > 0 else 0, sig, ts)
+        rank = (1 if ts > 0 else 0, ap_score, sig, ts)
         if best is None or rank > best[0]:
-            best = (rank, conn, ssid, sig)
+            best = (rank, conn, ssid, sig, ap_score)
 
     if best:
-        return best[1], best[2], best[3]
-    return None, None, 0
+        return best[1], best[2], best[3], best[4]
+    return None, None, 0, -9999.0
+
+
+def find_best_saved_network(nm_client, nm_wifi_dev, exclude_ssids=None):
+    """Return (NM.RemoteConnection, ssid, signal) for the strongest previously connected in-range network."""
+    conn, ssid, sig, _ = find_best_saved_candidate(
+        nm_client, nm_wifi_dev, exclude_ssids=exclude_ssids
+    )
+    return conn, ssid, sig
 
 CSS_STYLE = """
 * {
@@ -1366,7 +1639,7 @@ class WifiControlCenter(Gtk.Window):
         self.auto_switch_btn.get_style_context().add_class("auto-switch-btn")
         self.auto_switch_btn.set_valign(Gtk.Align.CENTER)
         self.auto_switch_btn.set_tooltip_text(
-            "Automatically connect to the best previously connected network if a connection is lost"
+            "Auto-switch on disconnect, bad connection, or better saved network (reverts if worse)"
         )
         self.auto_switch_btn.connect("clicked", self.on_auto_switch_clicked)
         autoswitch_header.pack_end(self.auto_switch_btn, False, False, 0)
@@ -2698,22 +2971,22 @@ class WifiControlCenter(Gtk.Window):
         self.speedtest_running = True
         self.speed_btn.set_label("Testing...")
         self.speed_btn.set_sensitive(False)
+        tested_ssid = self.active_ssid
 
         def worker():
             down_speed = "---"
-            up_speed = "---"
             try:
                 # Fast chunk download test from Cloudflare CDN
-                start = time.time()
                 p = subprocess.run([
                     "curl", "-s", "-w", "%{speed_download}", "-o", "/dev/null",
                     "https://speed.cloudflare.com/__down?bytes=10000000"
                 ], capture_output=True, text=True, timeout=10)
-                dur = time.time() - start
                 if p.returncode == 0 and p.stdout.strip():
                     speed_bps = float(p.stdout.strip())
                     down_mbps = (speed_bps * 8) / (1000 * 1000)
                     down_speed = f"{down_mbps:.1f} Mbps"
+                    if tested_ssid and down_mbps > 0:
+                        record_ssid_quality(tested_ssid, down_mbps=round(down_mbps, 2), internet_ok=True)
             except Exception:
                 down_speed = "Err"
 
@@ -3074,7 +3347,7 @@ class WifiControlCenter(Gtk.Window):
         is_saved = net.get("saved", False)
         is_secured = bool(net["security"] and net["security"] != "--")
         if self.auto_switcher_enabled:
-            send_auto_switch_command("resume")
+            send_auto_switch_command(f"manual:{ssid}")
 
         if is_saved or not is_secured:
             self.connecting_ssids.add(ssid)
@@ -3148,7 +3421,7 @@ class WifiControlCenter(Gtk.Window):
 
 
 class WifiAutoSwitcherDaemon:
-    """Headless background watcher that connects to the strongest saved Wi-Fi on connection loss."""
+    """Headless background watcher that keeps Wi-Fi on the best working saved network."""
 
     IGNORE_REASONS = (
         {
@@ -3170,12 +3443,20 @@ class WifiAutoSwitcherDaemon:
         self.client_signals = []
         self.last_connected_ssid = ""
         self.failed_cooldowns = {}
+        self.rejected_cooldowns = {}
         self.manual_pause_until = 0.0
+        self.proactive_pause_until = 0.0
         self.pending_switch_after_scan = False
         self.switching_in_progress = False
         self._lost_connection_pending = False
         self._ignore_next_disconnect = False
         self._retry_timer_id = None
+        self._health_timer_id = None
+        self._health_probe_in_flight = False
+        self._consecutive_soft_bad = 0
+        self._last_scan_eval_ts = 0.0
+        self._trial_seq = 0
+        self.trial_state = None
         self._lock_fd = None
         self._server_sock = None
 
@@ -3193,12 +3474,19 @@ class WifiAutoSwitcherDaemon:
         try:
             self._init_nm()
             self._start_socket_server()
+            self._health_timer_id = GLib.timeout_add_seconds(
+                HEALTH_CHECK_INTERVAL_SEC, self._on_health_timer
+            )
             GLib.idle_add(self._initial_check)
             self.loop.run()
         finally:
             self._cleanup()
 
     def _cleanup(self):
+        self._clear_trial_state()
+        if self._health_timer_id is not None:
+            GLib.source_remove(self._health_timer_id)
+            self._health_timer_id = None
         if self._retry_timer_id is not None:
             GLib.source_remove(self._retry_timer_id)
             self._retry_timer_id = None
@@ -3225,6 +3513,27 @@ class WifiAutoSwitcherDaemon:
                 os.close(self._lock_fd)
             except OSError:
                 pass
+
+    def _notify(self, title, body):
+        try:
+            subprocess.Popen(
+                ["notify-send", "-a", "Wi-Fi", "-i", "network-wireless", title, body],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    def _clear_trial_state(self):
+        if self.trial_state:
+            tid = self.trial_state.get("timeout_id")
+            if tid is not None:
+                try:
+                    GLib.source_remove(tid)
+                except Exception:
+                    pass
+            self.trial_state = None
+        self.switching_in_progress = False
 
     def _init_nm(self):
         self.nm_client = NM.Client.new(None)
@@ -3255,18 +3564,22 @@ class WifiAutoSwitcherDaemon:
                     self._record_active_ssid(d)
                 break
 
-    def _record_active_ssid(self, dev):
-        ap = dev.get_active_access_point()
-        if ap:
-            sb = ap.get_ssid()
-            data = sb.get_data() if sb else None
-            ssid = NM.utils_ssid_to_utf8(data) if data else ""
-            if ssid and ssid != "--":
-                self.last_connected_ssid = ssid
-                return
+    def _get_active_ap_info(self, dev):
+        if not dev:
+            return None, "", 0, 0.0, 0
         ac = dev.get_active_connection()
-        if ac and ac.get_id():
-            self.last_connected_ssid = ac.get_id()
+        conn = ac.get_connection() if ac else None
+        ap = dev.get_active_access_point()
+        ssid = _get_ap_ssid(ap) or (ac.get_id() if ac else "")
+        sig = int(ap.get_strength()) if ap else 0
+        max_mbps = float(ap.get_max_bitrate() or 0) / 1000.0 if ap else 0.0
+        freq = int(ap.get_frequency() or 0) if ap else 0
+        return conn, ssid, sig, max_mbps, freq
+
+    def _record_active_ssid(self, dev):
+        _conn, ssid, _sig, _mbps, _freq = self._get_active_ap_info(dev)
+        if ssid:
+            self.last_connected_ssid = ssid
 
     def _on_devices_changed(self, client, dev):
         self._bind_wifi_dev()
@@ -3276,21 +3589,86 @@ class WifiAutoSwitcherDaemon:
             self.manual_pause_until = 0.0
             self.pending_switch_after_scan = True
         else:
+            self._clear_trial_state()
             self.pending_switch_after_scan = False
             self._lost_connection_pending = False
 
     def _on_ap_or_scan(self, *args):
-        if self.pending_switch_after_scan and self.nm_wifi_dev:
-            if self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
-                self.try_auto_switch(allow_rescan=False)
+        if not self.nm_wifi_dev:
+            return
+        state = self.nm_wifi_dev.get_state()
+        if self.pending_switch_after_scan and state == NM.DeviceState.DISCONNECTED:
+            self.try_auto_switch(allow_rescan=False)
+        elif state == NM.DeviceState.ACTIVATED and not self.trial_state:
+            now = time.monotonic()
+            if now - self._last_scan_eval_ts >= 8.0:
+                self._last_scan_eval_ts = now
+                self._evaluate_connected_network(force_proactive=False)
 
     def _on_last_scan(self, dev, pspec):
-        if self.pending_switch_after_scan and dev.get_state() == NM.DeviceState.DISCONNECTED:
+        state = dev.get_state()
+        if self.pending_switch_after_scan and state == NM.DeviceState.DISCONNECTED:
             self.try_auto_switch(allow_rescan=False, allow_cooled_fallback=True)
+        elif state == NM.DeviceState.ACTIVATED and not self.trial_state:
+            now = time.monotonic()
+            if now - self._last_scan_eval_ts >= 8.0:
+                self._last_scan_eval_ts = now
+                self._evaluate_connected_network(force_proactive=False)
 
     def _on_state_changed(self, dev, new_state, old_state, reason):
         if not read_auto_switch_enabled():
+            self._clear_trial_state()
             self.loop.quit()
+            return
+
+        if reason == NM.DeviceStateReason.USER_REQUESTED and new_state in (
+            NM.DeviceState.DEACTIVATING,
+            NM.DeviceState.DISCONNECTED,
+        ):
+            self._clear_trial_state()
+
+        if self.trial_state:
+            trial = self.trial_state
+            phase = trial["phase"]
+            if phase == "switching_to_cand":
+                if new_state == NM.DeviceState.ACTIVATED:
+                    self._record_active_ssid(dev)
+                    if self.last_connected_ssid == trial["cand_ssid"]:
+                        if trial.get("timeout_id") is not None:
+                            try:
+                                GLib.source_remove(trial["timeout_id"])
+                            except Exception:
+                                pass
+                            trial["timeout_id"] = None
+                        trial["phase"] = "verifying_cand"
+                        GLib.timeout_add(
+                            int(POST_SWITCH_SETTLE_SEC * 1000),
+                            self._run_trial_verification,
+                            trial["id"],
+                        )
+                    return
+                if new_state == NM.DeviceState.FAILED or (
+                    new_state == NM.DeviceState.DISCONNECTED
+                    and reason != NM.DeviceStateReason.NEW_ACTIVATION
+                    and old_state >= NM.DeviceState.PREPARE
+                ):
+                    self._rollback_to_previous(f"'{trial['cand_ssid']}' failed to connect")
+                return
+            elif phase == "rolling_back":
+                if new_state == NM.DeviceState.ACTIVATED:
+                    self._record_active_ssid(dev)
+                    prev_ssid = trial["prev_ssid"]
+                    msg = trial.get("rollback_msg", "")
+                    self._clear_trial_state()
+                    self.proactive_pause_until = time.monotonic() + 45.0
+                    self._consecutive_soft_bad = 0
+                    self._notify(
+                        "Auto Switcher",
+                        f"Returned to '{prev_ssid}'" + (f" ({msg})" if msg else ""),
+                    )
+                elif new_state == NM.DeviceState.FAILED:
+                    self._clear_trial_state()
+                return
             return
 
         if new_state == NM.DeviceState.ACTIVATED:
@@ -3302,6 +3680,7 @@ class WifiAutoSwitcherDaemon:
             self._ignore_next_disconnect = False
             self.manual_pause_until = 0.0
             self.switching_in_progress = False
+            self._consecutive_soft_bad = 0
             return
 
         if new_state in (NM.DeviceState.PREPARE, NM.DeviceState.CONFIG, NM.DeviceState.NEED_AUTH, NM.DeviceState.IP_CONFIG):
@@ -3342,20 +3721,333 @@ class WifiAutoSwitcherDaemon:
                 self._lost_connection_pending = False
                 self.try_auto_switch(allow_rescan=True)
 
-    def _active_cooldowns(self):
+    def _active_cooldowns(self, include_rejected=False):
         now = time.monotonic()
-        expired = [k for k, exp in self.failed_cooldowns.items() if exp <= now]
-        for k in expired:
-            del self.failed_cooldowns[k]
-        return set(self.failed_cooldowns.keys())
+        for store in (self.failed_cooldowns, self.rejected_cooldowns):
+            for k in [k for k, exp in store.items() if exp <= now]:
+                del store[k]
+        res = set(self.failed_cooldowns.keys())
+        if include_rejected:
+            res |= set(self.rejected_cooldowns.keys())
+        return res
 
     def _initial_check(self):
         if not read_auto_switch_enabled():
             self.loop.quit()
             return False
-        if self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.DISCONNECTED:
+        if not self.nm_wifi_dev:
+            return False
+        state = self.nm_wifi_dev.get_state()
+        if state == NM.DeviceState.DISCONNECTED:
             self.try_auto_switch(allow_rescan=True)
+        elif state == NM.DeviceState.ACTIVATED:
+            self._evaluate_connected_network(force_proactive=True)
         return False
+
+    def _on_health_timer(self):
+        if not read_auto_switch_enabled():
+            self.loop.quit()
+            return False
+        if self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.ACTIVATED:
+            self._evaluate_connected_network(force_proactive=False)
+        return True
+
+    def _evaluate_connected_network(self, force_proactive=False):
+        if not read_auto_switch_enabled():
+            return
+        if self.trial_state or self.switching_in_progress or self._health_probe_in_flight:
+            return
+        if not self.nm_client or not self.nm_wifi_dev or not self.nm_client.wireless_get_enabled():
+            return
+        if self.nm_wifi_dev.get_state() != NM.DeviceState.ACTIVATED:
+            return
+
+        curr_conn, curr_ssid, curr_sig, curr_mbps, curr_freq = self._get_active_ap_info(self.nm_wifi_dev)
+        if not curr_conn or not curr_ssid:
+            return
+
+        self._health_probe_in_flight = True
+
+        def worker():
+            try:
+                cache = load_wifi_quality_cache()
+                cached_down = (cache.get(curr_ssid) or {}).get("down_mbps")
+                metrics = measure_live_network_quality(
+                    signal=curr_sig,
+                    max_mbps=curr_mbps,
+                    freq=curr_freq,
+                    cached_down_mbps=cached_down,
+                    include_speed=False,
+                )
+                bad_reason = metrics.get("bad_reason")
+                if bad_reason:
+                    is_hard = (not metrics.get("internet_ok")) or float(metrics.get("loss_pct") or 0.0) >= 35.0
+                    if is_hard or force_proactive:
+                        time.sleep(1.2)
+                        metrics = measure_live_network_quality(
+                            signal=curr_sig,
+                            max_mbps=curr_mbps,
+                            freq=curr_freq,
+                            cached_down_mbps=cached_down,
+                            include_speed=False,
+                        )
+                        bad_reason = metrics.get("bad_reason")
+
+                record_ssid_quality(
+                    curr_ssid,
+                    internet_ok=metrics["internet_ok"],
+                    loss_pct=metrics["loss_pct"],
+                    ping_ms=metrics["ping_ms"],
+                    signal=curr_sig,
+                    max_mbps=curr_mbps,
+                    freq=curr_freq,
+                )
+                GLib.idle_add(self._on_health_result, curr_conn, curr_ssid, metrics, bad_reason, force_proactive)
+            finally:
+                self._health_probe_in_flight = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_health_result(self, curr_conn, curr_ssid, curr_metrics, bad_reason, force_proactive):
+        if not read_auto_switch_enabled() or self.trial_state or self.switching_in_progress:
+            return False
+        if not self.nm_wifi_dev or self.nm_wifi_dev.get_state() != NM.DeviceState.ACTIVATED:
+            return False
+        _c, active_ssid, _s, _m, _f = self._get_active_ap_info(self.nm_wifi_dev)
+        if active_ssid != curr_ssid:
+            return False
+
+        now = time.monotonic()
+        if now < self.manual_pause_until and not force_proactive:
+            return False
+
+        cache = load_wifi_quality_cache()
+        cooldowns = self._active_cooldowns(include_rejected=True) | {curr_ssid}
+
+        if bad_reason:
+            is_hard = (not curr_metrics.get("internet_ok")) or float(curr_metrics.get("loss_pct") or 0.0) >= 35.0
+            if is_hard or force_proactive:
+                self._consecutive_soft_bad += 2
+            else:
+                self._consecutive_soft_bad += 1
+            if self._consecutive_soft_bad < 2:
+                return False
+
+            cand_conn, cand_ssid, cand_sig, _cand_score = find_best_saved_candidate(
+                self.nm_client,
+                self.nm_wifi_dev,
+                exclude_ssids=cooldowns,
+                require_previously_connected=False,
+                quality_cache=cache,
+            )
+            if not cand_conn:
+                return False
+            self._prepare_and_begin_trial(
+                curr_conn, curr_ssid, curr_metrics, cand_conn, cand_ssid, cand_sig, f"bad:{bad_reason}"
+            )
+            return False
+
+        self._consecutive_soft_bad = 0
+        if not force_proactive and now < self.proactive_pause_until:
+            return False
+
+        cand_conn, cand_ssid, cand_sig, cand_passive = find_best_saved_candidate(
+            self.nm_client,
+            self.nm_wifi_dev,
+            exclude_ssids=cooldowns,
+            require_previously_connected=True,
+            quality_cache=cache,
+        )
+        if not cand_conn:
+            return False
+
+        curr_passive = compute_passive_ap_score(
+            curr_metrics["signal"],
+            max_mbps=curr_metrics["max_mbps"],
+            freq_mhz=curr_metrics["freq"],
+            cached=cache.get(curr_ssid),
+        )
+        if cand_passive >= curr_passive + PROACTIVE_PASSIVE_MARGIN:
+            self._prepare_and_begin_trial(
+                curr_conn, curr_ssid, curr_metrics, cand_conn, cand_ssid, cand_sig, "better_saved"
+            )
+        return False
+
+    def _prepare_and_begin_trial(self, prev_conn, prev_ssid, prev_metrics, cand_conn, cand_ssid, cand_sig, reason):
+        if self.trial_state or self.switching_in_progress:
+            return
+        self.switching_in_progress = True
+
+        def prep_worker():
+            final_prev = dict(prev_metrics)
+            if final_prev.get("internet_ok"):
+                speed = _run_quick_speed_probe()
+                if speed is not None:
+                    final_prev["down_mbps"] = speed
+                    final_prev["score"] = compute_live_network_score(final_prev)
+                    record_ssid_quality(prev_ssid, down_mbps=speed, internet_ok=True)
+            GLib.idle_add(
+                self._activate_trial_candidate,
+                prev_conn,
+                prev_ssid,
+                final_prev,
+                cand_conn,
+                cand_ssid,
+                cand_sig,
+                reason,
+            )
+
+        threading.Thread(target=prep_worker, daemon=True).start()
+
+    def _activate_trial_candidate(self, prev_conn, prev_ssid, prev_metrics, cand_conn, cand_ssid, cand_sig, reason):
+        if not read_auto_switch_enabled() or not self.nm_client or not self.nm_wifi_dev:
+            self.switching_in_progress = False
+            return False
+        if self.nm_wifi_dev.get_state() != NM.DeviceState.ACTIVATED:
+            self.switching_in_progress = False
+            return False
+
+        self._trial_seq += 1
+        seq = self._trial_seq
+        timeout_id = GLib.timeout_add_seconds(TRIAL_CONNECT_TIMEOUT_SEC, self._on_trial_timeout, seq)
+        self.trial_state = {
+            "id": seq,
+            "phase": "switching_to_cand",
+            "prev_conn": prev_conn,
+            "prev_ssid": prev_ssid,
+            "prev_metrics": prev_metrics,
+            "cand_conn": cand_conn,
+            "cand_ssid": cand_ssid,
+            "cand_sig": cand_sig,
+            "reason": reason,
+            "timeout_id": timeout_id,
+        }
+        try:
+            self.nm_client.activate_connection_async(
+                cand_conn,
+                self.nm_wifi_dev,
+                None,
+                None,
+                self._on_trial_cand_activate_done,
+                seq,
+            )
+        except Exception:
+            self._rollback_to_previous(f"Failed to start switch to '{cand_ssid}'")
+        return False
+
+    def _on_trial_cand_activate_done(self, client, res, seq):
+        try:
+            client.activate_connection_finish(res)
+        except Exception:
+            if self.trial_state and self.trial_state["id"] == seq and self.trial_state["phase"] == "switching_to_cand":
+                self._rollback_to_previous(f"'{self.trial_state['cand_ssid']}' activation error")
+
+    def _on_trial_timeout(self, seq):
+        if self.trial_state and self.trial_state["id"] == seq:
+            self.trial_state["timeout_id"] = None
+            if self.trial_state["phase"] in ("switching_to_cand", "verifying_cand"):
+                self._rollback_to_previous(f"'{self.trial_state['cand_ssid']}' timed out")
+        return False
+
+    def _run_trial_verification(self, seq):
+        if not self.trial_state or self.trial_state["id"] != seq or self.trial_state["phase"] != "verifying_cand":
+            return False
+        if not self.nm_wifi_dev or self.nm_wifi_dev.get_state() != NM.DeviceState.ACTIVATED:
+            self._rollback_to_previous("candidate disconnected")
+            return False
+
+        _conn, active_ssid, sig, max_mbps, freq = self._get_active_ap_info(self.nm_wifi_dev)
+        cand_ssid = self.trial_state["cand_ssid"]
+        if active_ssid != cand_ssid:
+            self._clear_trial_state()
+            return False
+
+        def verify_worker():
+            cand_metrics = measure_live_network_quality(
+                signal=sig,
+                max_mbps=max_mbps,
+                freq=freq,
+                include_speed=True,
+            )
+            record_ssid_quality(
+                cand_ssid,
+                internet_ok=cand_metrics["internet_ok"],
+                loss_pct=cand_metrics["loss_pct"],
+                ping_ms=cand_metrics["ping_ms"],
+                down_mbps=cand_metrics.get("down_mbps"),
+                signal=sig,
+                max_mbps=max_mbps,
+                freq=freq,
+            )
+            GLib.idle_add(self._finish_trial_verification, seq, cand_metrics)
+
+        threading.Thread(target=verify_worker, daemon=True).start()
+        return False
+
+    def _finish_trial_verification(self, seq, cand_metrics):
+        if not self.trial_state or self.trial_state["id"] != seq or self.trial_state["phase"] != "verifying_cand":
+            return False
+        if not read_auto_switch_enabled():
+            self._clear_trial_state()
+            return False
+
+        trial = self.trial_state
+        cand_ssid = trial["cand_ssid"]
+        prev_ssid = trial["prev_ssid"]
+        reason = trial["reason"]
+        better, detail = is_candidate_better(
+            cand_metrics,
+            trial["prev_metrics"],
+            proactive=(reason == "better_saved"),
+        )
+        if better:
+            self._clear_trial_state()
+            self.proactive_pause_until = time.monotonic() + 60.0
+            self._consecutive_soft_bad = 0
+            if reason.startswith("bad:"):
+                self.failed_cooldowns[prev_ssid] = time.monotonic() + FAILED_COOLDOWN_SEC
+            self._notify("Auto Switcher", f"Switched to '{cand_ssid}' ({detail})")
+        else:
+            self._rollback_to_previous(f"'{cand_ssid}' not better: {detail}")
+        return False
+
+    def _rollback_to_previous(self, msg=""):
+        if not self.trial_state or not self.nm_client or not self.nm_wifi_dev:
+            self._clear_trial_state()
+            return
+        trial = self.trial_state
+        cand_ssid = trial["cand_ssid"]
+        prev_conn = trial["prev_conn"]
+        prev_ssid = trial["prev_ssid"]
+        self.rejected_cooldowns[cand_ssid] = time.monotonic() + REJECTED_COOLDOWN_SEC
+        if trial.get("timeout_id") is not None:
+            try:
+                GLib.source_remove(trial["timeout_id"])
+            except Exception:
+                pass
+            trial["timeout_id"] = None
+        trial["phase"] = "rolling_back"
+        trial["rollback_msg"] = msg
+        try:
+            self.nm_client.activate_connection_async(
+                prev_conn,
+                self.nm_wifi_dev,
+                None,
+                None,
+                self._on_rollback_done,
+                (trial["id"], prev_ssid, msg),
+            )
+        except Exception:
+            self._clear_trial_state()
+
+    def _on_rollback_done(self, client, res, info):
+        _seq, prev_ssid, msg = info
+        try:
+            client.activate_connection_finish(res)
+        except Exception:
+            if self.trial_state and self.trial_state.get("phase") == "rolling_back":
+                self._clear_trial_state()
+                self._notify("Auto Switcher", f"Could not return to '{prev_ssid}'" + (f" ({msg})" if msg else ""))
 
     def _schedule_retry(self):
         if self._retry_timer_id is not None:
@@ -3375,7 +4067,7 @@ class WifiAutoSwitcherDaemon:
         if not read_auto_switch_enabled():
             self.loop.quit()
             return
-        if self.switching_in_progress or not self.nm_client or not self.nm_wifi_dev:
+        if self.trial_state or self.switching_in_progress or not self.nm_client or not self.nm_wifi_dev:
             return
         if not self.nm_client.wireless_get_enabled():
             return
@@ -3384,7 +4076,7 @@ class WifiAutoSwitcherDaemon:
         if self.nm_wifi_dev.get_state() != NM.DeviceState.DISCONNECTED:
             return
 
-        cooldowns = self._active_cooldowns()
+        cooldowns = self._active_cooldowns(include_rejected=False)
         best_conn, best_ssid, best_sig = find_best_saved_network(
             self.nm_client, self.nm_wifi_dev, exclude_ssids=cooldowns
         )
@@ -3419,14 +4111,7 @@ class WifiAutoSwitcherDaemon:
         ssid, sig = info
         try:
             client.activate_connection_finish(res)
-            subprocess.Popen(
-                [
-                    "notify-send", "-a", "Wi-Fi", "-i", "network-wireless",
-                    "Auto Switcher", f"Connected to '{ssid}' ({sig}%)"
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            self._notify("Auto Switcher", f"Connected to '{ssid}' ({sig}%)")
         except Exception:
             self.failed_cooldowns[ssid] = time.monotonic() + 30.0
             self._schedule_retry()
@@ -3454,6 +4139,9 @@ class WifiAutoSwitcherDaemon:
                         GLib.idle_add(self._handle_check_cmd)
                     elif msg == "resume":
                         GLib.idle_add(self._handle_resume_cmd)
+                    elif msg.startswith("manual:"):
+                        ssid = msg.split(":", 1)[1]
+                        GLib.idle_add(self._handle_manual_cmd, ssid)
                     elif msg.startswith("pause:"):
                         ssid = msg.split(":", 1)[1]
                         GLib.idle_add(self._handle_pause_cmd, ssid)
@@ -3464,14 +4152,30 @@ class WifiAutoSwitcherDaemon:
 
     def _handle_check_cmd(self):
         self.manual_pause_until = 0.0
-        self.try_auto_switch(allow_rescan=True, allow_cooled_fallback=True)
+        self.proactive_pause_until = 0.0
+        self.rejected_cooldowns.clear()
+        if self.nm_wifi_dev and self.nm_wifi_dev.get_state() == NM.DeviceState.ACTIVATED:
+            self._evaluate_connected_network(force_proactive=True)
+        else:
+            self.try_auto_switch(allow_rescan=True, allow_cooled_fallback=True)
         return False
 
     def _handle_resume_cmd(self):
         self.manual_pause_until = 0.0
+        self.proactive_pause_until = 0.0
+        return False
+
+    def _handle_manual_cmd(self, ssid):
+        self._clear_trial_state()
+        self.manual_pause_until = 0.0
+        self.proactive_pause_until = time.monotonic() + MANUAL_CONNECT_GRACE_SEC
+        self._consecutive_soft_bad = 0
+        if ssid:
+            self.rejected_cooldowns.pop(ssid, None)
         return False
 
     def _handle_pause_cmd(self, ssid):
+        self._clear_trial_state()
         self.manual_pause_until = time.monotonic() + 25.0
         self.pending_switch_after_scan = False
         self._lost_connection_pending = False
