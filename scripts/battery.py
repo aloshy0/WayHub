@@ -206,7 +206,7 @@ def get_battery_info():
     return json.dumps({
         "text": text,
         "tooltip": tooltip,
-        "class": " ".join(classes),
+        "class": list(dict.fromkeys(classes)),
         "percentage": pct_val
     })
 
