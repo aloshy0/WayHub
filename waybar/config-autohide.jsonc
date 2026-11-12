@@ -28,7 +28,7 @@
 
   "custom/launcher": {
     "format": "",
-    "on-click": "radiqctl toggle",
+    "on-click": "launcherrctl toggle",
     "tooltip": false
   },
 
