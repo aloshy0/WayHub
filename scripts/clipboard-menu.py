@@ -689,6 +689,9 @@ class ClipboardPopup(Gtk.Window):
         no_btn.connect("clicked", lambda _w: self.confirm_bar.set_visible(False))
         self.confirm_bar.pack_start(yes_btn, False, False, 0)
         self.confirm_bar.pack_start(no_btn, False, False, 0)
+        confirm_lbl.show()
+        yes_btn.show()
+        no_btn.show()
         self.card.pack_start(self.confirm_bar, False, False, 0)
 
         # Search input
