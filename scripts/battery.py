@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-import os
-import re
+import fcntl
 import glob
 import json
+import os
+import re
 import subprocess
+import sys
 
 STATE_DIR = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
 AUTO_ECO_THRESHOLD = 30
+PERFORMANCE_MIN_CHARGE = 30
 AUTO_ECO_STATE_FILE = os.path.join(STATE_DIR, "waybar-auto-eco.json")
+SYNC_LOCK_PATH = f"/tmp/waybar_power_sync_{os.getuid()}.lock"
 
 
 def _read_sysfs(path):
@@ -111,8 +115,118 @@ def get_power_profile():
     return "balanced"
 
 
-def set_power_profile(profile_id, notify_waybar=True):
-    """Apply active power profile via PowerProfiles D-Bus or powerprofilesctl."""
+def _notify(title, body):
+    try:
+        subprocess.Popen(
+            ["notify-send", "-u", "low", title, body],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
+
+def is_performance_allowed(cap):
+    """Allow Performance mode only when battery charge is at least 30% (or unknown)."""
+    return cap is None or cap >= PERFORMANCE_MIN_CHARGE
+
+
+def _get_target_monitors():
+    try:
+        out = subprocess.check_output(
+            ["hyprctl", "monitors", "-j"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=1.5,
+        )
+        monitors = json.loads(out)
+    except Exception:
+        return []
+
+    active = [m for m in monitors if not m.get("disabled")]
+    internal = [m for m in active if m.get("name", "").startswith("eDP")]
+    return internal if internal else active[:1]
+
+
+def get_current_refresh_hz():
+    """Return rounded current refresh rate (Hz) of the primary/internal monitor, or None."""
+    for mon in _get_target_monitors():
+        hz = mon.get("refreshRate")
+        if isinstance(hz, (int, float)) and hz > 0:
+            return round(hz)
+    return None
+
+
+def _select_refresh_mode(profile_id, mon):
+    cur_w = mon.get("width")
+    cur_h = mon.get("height")
+    candidates = []
+    for entry in mon.get("availableModes", []):
+        match = re.match(r"^(\d+)x(\d+)@(\d+(?:\.\d+)?)Hz$", entry.strip())
+        if match and int(match.group(1)) == cur_w and int(match.group(2)) == cur_h:
+            candidates.append((float(match.group(3)), entry.strip()[:-2]))
+
+    if not candidates:
+        return None
+    if profile_id in ("power-saver", "low-power"):
+        return min(candidates, key=lambda item: (abs(item[0] - 60.0), item[0]))
+    return max(candidates, key=lambda item: item[0])
+
+
+def sync_display_refresh_rate(profile_id):
+    """Set internal monitor to 60 Hz for Eco/power-saver and max Hz for balanced/performance."""
+    changed = False
+    try:
+        lock_fd = os.open(SYNC_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        lock_fd = None
+
+    try:
+        if lock_fd is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        for mon in _get_target_monitors():
+            selected = _select_refresh_mode(profile_id, mon)
+            if not selected:
+                continue
+            target_hz, mode_str = selected
+            cur_hz = float(mon.get("refreshRate") or 0.0)
+            if abs(cur_hz - target_hz) <= 1.0:
+                continue
+            name = mon.get("name", "")
+            pos = f"{mon.get('x', 0)}x{mon.get('y', 0)}"
+            scale = str(mon.get("scale", 1))
+            lua_expr = (
+                f'hl.monitor({{ output = "{name}", mode = "{mode_str}", '
+                f'position = "{pos}", scale = "{scale}" }})'
+            )
+            res = subprocess.run(
+                ["hyprctl", "eval", lua_expr],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            if res.returncode == 0:
+                changed = True
+    except Exception:
+        pass
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except OSError:
+                pass
+    return changed
+
+
+def set_power_profile(profile_id, notify_waybar=True, cap=None):
+    """Apply active power profile via PowerProfiles D-Bus or powerprofilesctl and sync display Hz."""
+    if profile_id == "performance":
+        if cap is None:
+            _, cap, _, _, _, _ = read_battery_summary()
+        if not is_performance_allowed(cap):
+            return False
+
     applied = False
     try:
         res = subprocess.run(
@@ -146,6 +260,9 @@ def set_power_profile(profile_id, notify_waybar=True):
         except Exception:
             pass
 
+    if applied:
+        sync_display_refresh_rate(profile_id)
+
     if notify_waybar:
         try:
             subprocess.run(
@@ -158,43 +275,46 @@ def set_power_profile(profile_id, notify_waybar=True):
     return applied
 
 
-def maybe_auto_switch_eco(cap, status, current_profile):
-    """Switch to Eco (power-saver) once when battery drops below AUTO_ECO_THRESHOLD on battery."""
-    if cap is None:
-        return current_profile
-
+def reconcile_power_state(cap, status, current_profile):
+    """Enforce power-profile rules (<30% auto-eco, <30% lock performance, charging -> balanced) and Hz."""
     state = _load_json_state(AUTO_ECO_STATE_FILE)
     triggered = bool(state.get("triggered", False))
+    was_charging = state.get("charging")
+    is_charging = status.lower() == "charging"
 
-    if cap >= AUTO_ECO_THRESHOLD:
-        if triggered:
-            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": False})
-        return current_profile
-
-    if status.lower() == "charging":
-        return current_profile
-
-    if not triggered:
-        if current_profile == "power-saver":
-            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": True})
-        elif set_power_profile("power-saver", notify_waybar=False):
+    if cap is not None and not is_performance_allowed(cap) and current_profile == "performance":
+        fallback = "balanced" if is_charging else "power-saver"
+        if set_power_profile(fallback, notify_waybar=False, cap=cap):
             current_profile = get_power_profile()
-            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": True})
-            try:
-                subprocess.Popen(
-                    [
-                        "notify-send",
-                        "-u",
-                        "low",
-                        "Battery Below 30%",
-                        f"Switched to Eco (Power Saver) mode at {cap}%.",
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except OSError:
-                pass
+            if fallback == "power-saver":
+                triggered = True
+            _notify(
+                "Battery Below 30%",
+                f"Performance disabled at {cap}% — switched to {'Balanced' if fallback == 'balanced' else 'Eco'} mode.",
+            )
 
+    if is_charging:
+        triggered = False
+        if (was_charging is not True) and current_profile == "power-saver":
+            if set_power_profile("balanced", notify_waybar=False, cap=cap):
+                current_profile = get_power_profile()
+                _notify("Charger Connected", "Switched back to Balanced mode (144 Hz).")
+    elif cap is not None:
+        if cap >= AUTO_ECO_THRESHOLD:
+            triggered = False
+        elif not triggered:
+            if current_profile == "power-saver":
+                triggered = True
+            elif set_power_profile("power-saver", notify_waybar=False, cap=cap):
+                current_profile = get_power_profile()
+                triggered = True
+                _notify("Battery Below 30%", f"Switched to Eco mode (60 Hz) at {cap}%.")
+
+    new_state = {"triggered": triggered, "charging": is_charging}
+    if new_state != state:
+        _save_json_state(AUTO_ECO_STATE_FILE, new_state)
+
+    sync_display_refresh_rate(current_profile)
     return current_profile
 
 
@@ -254,12 +374,18 @@ def _compute_capacity(bat_path):
     return None, False, energy_now, None
 
 
-def get_battery_info():
+def read_battery_summary():
+    """Return (status, cap, estimated, energy_now, energy_full, cycles) for the primary battery."""
     bat_paths = sorted(glob.glob("/sys/class/power_supply/BAT*"))
     bat_path = bat_paths[0] if bat_paths else "/sys/class/power_supply/BAT0"
-
     status = _read_sysfs(os.path.join(bat_path, "status")) or "Unknown"
     cap, estimated, energy_now, energy_ref = _compute_capacity(bat_path)
+    cycles = _read_int(os.path.join(bat_path, "cycle_count"))
+    return status, cap, estimated, energy_now, energy_ref, cycles
+
+
+def get_battery_info():
+    status, cap, estimated, energy_now, energy_ref, _cycles = read_battery_summary()
 
     icons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
     if cap is None:
@@ -279,7 +405,8 @@ def get_battery_info():
     else:
         text = f"{cap_label} {icon}"
 
-    profile = maybe_auto_switch_eco(cap, status, get_power_profile())
+    profile = reconcile_power_state(cap, status, get_power_profile())
+    refresh_hz = get_current_refresh_hz()
 
     classes = [profile]
     if profile in ("power-saver", "low-power"):
@@ -289,6 +416,8 @@ def get_battery_info():
         classes.append("charging")
 
     profile_display = "Eco (Power Saver)" if profile in ("power-saver", "low-power") else profile.capitalize()
+    if refresh_hz:
+        profile_display = f"{profile_display} ({refresh_hz} Hz)"
     if cap is None:
         bat_detail = f"Unknown ({status})"
     elif estimated and energy_now is not None and energy_ref:
@@ -311,5 +440,15 @@ def get_battery_info():
     })
 
 
+def toggle_eco_mode():
+    target = "balanced" if get_power_profile() == "power-saver" else "power-saver"
+    set_power_profile(target, notify_waybar=True)
+
+
 if __name__ == "__main__":
-    print(get_battery_info())
+    if len(sys.argv) >= 2 and sys.argv[1] == "--toggle-eco":
+        toggle_eco_mode()
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--set":
+        set_power_profile(sys.argv[2], notify_waybar=True)
+    else:
+        print(get_battery_info())

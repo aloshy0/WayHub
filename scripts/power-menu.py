@@ -4,7 +4,6 @@ Waybar Power & Battery Profile Selector Popup.
 Built with GTK3 & GtkLayerShell to match the other Waybar control center popups.
 """
 
-import glob
 import math
 import os
 import signal
@@ -30,21 +29,21 @@ PROFILES = [
         "id": "power-saver",
         "icon": "󰌪",
         "name": "Eco (Power Saver)",
-        "desc": "Lower power draw & cooler operation",
+        "desc": "60 Hz • Lower power draw & cooler operation",
         "color": "#ff9f43",
     },
     {
         "id": "balanced",
         "icon": "󰾅",
         "name": "Balanced",
-        "desc": "Adaptive performance & battery efficiency",
+        "desc": "144 Hz • Adaptive performance & battery efficiency",
         "color": "#55e6a5",
     },
     {
         "id": "performance",
         "icon": "󰓅",
         "name": "Performance",
-        "desc": "Maximum CPU boost & thermal headroom",
+        "desc": "144 Hz • Maximum CPU boost & thermal headroom",
         "color": "#ff5c5c",
     },
 ]
@@ -136,6 +135,17 @@ window {
 .profile-btn:hover {
     background-color: #293444;
     border-color: #3e4c63;
+}
+
+.profile-btn:disabled {
+    background-color: #192029;
+    border-color: #252e3b;
+    opacity: 0.45;
+}
+
+.profile-btn:disabled:hover {
+    background-color: #192029;
+    border-color: #252e3b;
 }
 
 .profile-icon {
@@ -244,6 +254,7 @@ class PowerControlCenter(Gtk.Window):
         self.connect("destroy", Gtk.main_quit)
 
         self.active_profile = "balanced"
+        self.current_cap = None
         self.pending_profile = None
         self.pending_until = 0.0
         self.profile_widgets = {}
@@ -388,19 +399,24 @@ class PowerControlCenter(Gtk.Window):
 
             btn.add(row)
             profiles_box.pack_start(btn, False, False, 0)
-            self.profile_widgets[prof["id"]] = (btn, badge_lbl)
+            self.profile_widgets[prof["id"]] = (btn, desc_lbl, badge_lbl, prof["desc"])
 
         self.lbl_footer = Gtk.Label(label="", xalign=0)
         self.lbl_footer.get_style_context().add_class("footer-stats")
         self.card.pack_start(self.lbl_footer, False, False, 0)
 
     def on_profile_clicked(self, profile_id):
+        if profile_id == "performance" and not battery_helper.is_performance_allowed(self.current_cap):
+            return
+
         self.pending_profile = profile_id
         self.pending_until = time.monotonic() + 2.0
         self.apply_profile_visuals(profile_id)
 
         def worker():
-            set_system_power_profile(profile_id)
+            ok = set_system_power_profile(profile_id)
+            if not ok:
+                self.pending_profile = None
             GLib.idle_add(self.refresh_state)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -414,9 +430,19 @@ class PowerControlCenter(Gtk.Window):
         if profile_id in ("power-saver", "balanced", "performance"):
             header_ctx.add_class(profile_id)
 
-        for pid, (btn, badge) in self.profile_widgets.items():
+        perf_allowed = battery_helper.is_performance_allowed(self.current_cap)
+        for pid, (btn, desc_lbl, badge, default_desc) in self.profile_widgets.items():
             ctx = btn.get_style_context()
             active_cls = f"active-{pid}"
+            if pid == "performance" and not perf_allowed:
+                btn.set_sensitive(False)
+                desc_lbl.set_label(f"Unavailable below {battery_helper.PERFORMANCE_MIN_CHARGE}% battery")
+                ctx.remove_class(active_cls)
+                badge.set_label("")
+                continue
+
+            btn.set_sensitive(True)
+            desc_lbl.set_label(default_desc)
             if pid == profile_id:
                 ctx.add_class(active_cls)
                 badge.set_label("ACTIVE")
@@ -430,18 +456,26 @@ class PowerControlCenter(Gtk.Window):
 
     def refresh_state(self):
         def worker():
-            bat_paths = sorted(glob.glob("/sys/class/power_supply/BAT*"))
-            bat_path = bat_paths[0] if bat_paths else "/sys/class/power_supply/BAT0"
-            status = battery_helper._read_sysfs(os.path.join(bat_path, "status")) or "Unknown"
-            cap, estimated, energy_now, energy_full = battery_helper._compute_capacity(bat_path)
-            cycles = battery_helper._read_int(os.path.join(bat_path, "cycle_count"))
+            status, cap, estimated, energy_now, energy_full, cycles = battery_helper.read_battery_summary()
             profile = battery_helper.get_power_profile()
-            GLib.idle_add(self.update_ui, profile, cap, estimated, status, energy_now, energy_full, cycles)
+            refresh_hz = battery_helper.get_current_refresh_hz()
+            GLib.idle_add(
+                self.update_ui,
+                profile,
+                cap,
+                estimated,
+                status,
+                energy_now,
+                energy_full,
+                cycles,
+                refresh_hz,
+            )
 
         threading.Thread(target=worker, daemon=True).start()
         return False
 
-    def update_ui(self, profile, cap, estimated, status, energy_now, energy_full, cycles):
+    def update_ui(self, profile, cap, estimated, status, energy_now, energy_full, cycles, refresh_hz):
+        self.current_cap = cap
         icons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
         if status == "Charging":
             self.header_icon.set_label("󰂄")
@@ -458,6 +492,8 @@ class PowerControlCenter(Gtk.Window):
             footer_parts.append(f"{energy_now / 1_000_000:.1f} / {energy_full / 1_000_000:.1f} Wh")
         if cycles is not None and cycles > 0:
             footer_parts.append(f"{cycles} cycles")
+        if refresh_hz:
+            footer_parts.append(f"{refresh_hz} Hz")
         self.lbl_footer.set_label(" • ".join(footer_parts))
         self.lbl_footer.set_visible(bool(footer_parts))
 
