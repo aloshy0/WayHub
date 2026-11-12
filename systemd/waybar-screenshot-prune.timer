@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically delete screenshots older than 10 days
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

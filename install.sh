@@ -134,6 +134,7 @@ safe_install "scripts/apps-menu.sh" "$HOME/.config/waybar/apps-menu.sh"
 safe_install "scripts/apps-menu.py" "$HOME/.config/waybar/apps-menu.py"
 safe_install "scripts/clipboard-menu.sh" "$HOME/.config/waybar/clipboard-menu.sh"
 safe_install "scripts/clipboard-menu.py" "$HOME/.config/waybar/clipboard-menu.py"
+safe_install "scripts/screenshot.sh" "$HOME/.config/waybar/screenshot.sh"
 safe_install "scripts/gpu-temp.sh" "$HOME/.config/waybar/gpu-temp.sh"
 chmod +x "$HOME/.config/waybar/wifi-menu.sh"
 chmod +x "$HOME/.config/waybar/wifi-menu.py"
@@ -156,6 +157,7 @@ chmod +x "$HOME/.config/waybar/apps-menu.sh"
 chmod +x "$HOME/.config/waybar/apps-menu.py"
 chmod +x "$HOME/.config/waybar/clipboard-menu.sh"
 chmod +x "$HOME/.config/waybar/clipboard-menu.py"
+chmod +x "$HOME/.config/waybar/screenshot.sh"
 chmod +x "$HOME/.config/waybar/gpu-temp.sh"
 
 # 4. Install Wofi files
@@ -163,15 +165,19 @@ echo -e "${YELLOW}Installing Wofi files...${NC}"
 safe_install "wofi/config" "$HOME/.config/wofi/config"
 safe_install "wofi/style.css" "$HOME/.config/wofi/style.css"
 
-# 4.5 Install systemd user timer for 24h clipboard auto-expiration
+# 4.5 Install systemd user timers (24h clipboard auto-clear & 10-day screenshot cleanup)
+mkdir -p "$HOME/Pictures/Screenshots"
 if [ -d "systemd" ]; then
-    echo -e "${YELLOW}Installing clipboard 24h auto-clear timer...${NC}"
+    echo -e "${YELLOW}Installing clipboard & screenshot auto-cleanup timers...${NC}"
     mkdir -p "$HOME/.config/systemd/user"
     safe_install "systemd/waybar-clipboard-prune.service" "$HOME/.config/systemd/user/waybar-clipboard-prune.service"
     safe_install "systemd/waybar-clipboard-prune.timer" "$HOME/.config/systemd/user/waybar-clipboard-prune.timer"
+    safe_install "systemd/waybar-screenshot-prune.service" "$HOME/.config/systemd/user/waybar-screenshot-prune.service"
+    safe_install "systemd/waybar-screenshot-prune.timer" "$HOME/.config/systemd/user/waybar-screenshot-prune.timer"
     if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
         systemctl --user daemon-reload >/dev/null 2>&1 || true
         systemctl --user enable --now waybar-clipboard-prune.timer >/dev/null 2>&1 || true
+        systemctl --user enable --now waybar-screenshot-prune.timer >/dev/null 2>&1 || true
     fi
 fi
 

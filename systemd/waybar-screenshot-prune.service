@@ -1,0 +1,7 @@
+[Unit]
+Description=Permanently delete screenshots older than 10 days
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %h/.config/waybar/screenshot.sh --prune
+

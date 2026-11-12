@@ -39,8 +39,11 @@ files_to_remove=(
     "$HOME/.config/waybar/autohide-daemon.py"
     "$HOME/.config/waybar/clipboard-menu.sh"
     "$HOME/.config/waybar/clipboard-menu.py"
+    "$HOME/.config/waybar/screenshot.sh"
     "$HOME/.config/systemd/user/waybar-clipboard-prune.service"
     "$HOME/.config/systemd/user/waybar-clipboard-prune.timer"
+    "$HOME/.config/systemd/user/waybar-screenshot-prune.service"
+    "$HOME/.config/systemd/user/waybar-screenshot-prune.timer"
     "$HOME/.config/wofi/config"
     "$HOME/.config/wofi/style.css"
 )
