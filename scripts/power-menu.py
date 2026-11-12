@@ -9,7 +9,6 @@ import math
 import os
 import signal
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -215,46 +214,8 @@ window {
 
 
 def set_system_power_profile(profile_id):
-    """Apply active power profile via PowerProfiles D-Bus or powerprofilesctl."""
-    applied = False
-    try:
-        res = subprocess.run(
-            [
-                "busctl",
-                "set-property",
-                "net.hadess.PowerProfiles",
-                "/net/hadess/PowerProfiles",
-                "net.hadess.PowerProfiles",
-                "ActiveProfile",
-                "s",
-                profile_id,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=3,
-        )
-        applied = res.returncode == 0
-    except Exception:
-        pass
-
-    if not applied:
-        try:
-            res = subprocess.run(
-                ["powerprofilesctl", "set", profile_id],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=3,
-            )
-            applied = res.returncode == 0
-        except Exception:
-            pass
-
-    subprocess.run(
-        ["pkill", "-RTMIN+8", "waybar"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return applied
+    """Apply active power profile via shared battery helper."""
+    return battery_helper.set_power_profile(profile_id, notify_waybar=True)
 
 
 class PowerControlCenter(Gtk.Window):

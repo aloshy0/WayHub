@@ -6,6 +6,8 @@ import json
 import subprocess
 
 STATE_DIR = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+AUTO_ECO_THRESHOLD = 30
+AUTO_ECO_STATE_FILE = os.path.join(STATE_DIR, "waybar-auto-eco.json")
 
 
 def _read_sysfs(path):
@@ -26,23 +28,29 @@ def _read_int(path):
         return None
 
 
-def _load_cached_full(bat_name):
-    cache_file = os.path.join(STATE_DIR, f"waybar-battery-full-{bat_name}.json")
+def _load_json_state(path):
     try:
-        with open(cache_file, "r") as f:
+        with open(path, "r") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
 
 
-def _save_cached_full(bat_name, data):
-    cache_file = os.path.join(STATE_DIR, f"waybar-battery-full-{bat_name}.json")
+def _save_json_state(path, data):
     try:
-        os.makedirs(STATE_DIR, exist_ok=True)
-        with open(cache_file, "w") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
             json.dump(data, f)
     except OSError:
         pass
+
+
+def _load_cached_full(bat_name):
+    return _load_json_state(os.path.join(STATE_DIR, f"waybar-battery-full-{bat_name}.json"))
+
+
+def _save_cached_full(bat_name, data):
+    _save_json_state(os.path.join(STATE_DIR, f"waybar-battery-full-{bat_name}.json"), data)
 
 
 def _upower_history_full_uwh(model, serial):
@@ -101,6 +109,93 @@ def get_power_profile():
         pass
 
     return "balanced"
+
+
+def set_power_profile(profile_id, notify_waybar=True):
+    """Apply active power profile via PowerProfiles D-Bus or powerprofilesctl."""
+    applied = False
+    try:
+        res = subprocess.run(
+            [
+                "busctl",
+                "set-property",
+                "net.hadess.PowerProfiles",
+                "/net/hadess/PowerProfiles",
+                "net.hadess.PowerProfiles",
+                "ActiveProfile",
+                "s",
+                profile_id,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+        applied = res.returncode == 0
+    except Exception:
+        pass
+
+    if not applied:
+        try:
+            res = subprocess.run(
+                ["powerprofilesctl", "set", profile_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+            applied = res.returncode == 0
+        except Exception:
+            pass
+
+    if notify_waybar:
+        try:
+            subprocess.run(
+                ["pkill", "-RTMIN+8", "waybar"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+    return applied
+
+
+def maybe_auto_switch_eco(cap, status, current_profile):
+    """Switch to Eco (power-saver) once when battery drops below AUTO_ECO_THRESHOLD on battery."""
+    if cap is None:
+        return current_profile
+
+    state = _load_json_state(AUTO_ECO_STATE_FILE)
+    triggered = bool(state.get("triggered", False))
+
+    if cap >= AUTO_ECO_THRESHOLD:
+        if triggered:
+            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": False})
+        return current_profile
+
+    if status.lower() == "charging":
+        return current_profile
+
+    if not triggered:
+        if current_profile == "power-saver":
+            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": True})
+        elif set_power_profile("power-saver", notify_waybar=False):
+            current_profile = get_power_profile()
+            _save_json_state(AUTO_ECO_STATE_FILE, {"triggered": True})
+            try:
+                subprocess.Popen(
+                    [
+                        "notify-send",
+                        "-u",
+                        "low",
+                        "Battery Below 30%",
+                        f"Switched to Eco (Power Saver) mode at {cap}%.",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                pass
+
+    return current_profile
 
 
 def _compute_capacity(bat_path):
@@ -184,7 +279,7 @@ def get_battery_info():
     else:
         text = f"{cap_label} {icon}"
 
-    profile = get_power_profile()
+    profile = maybe_auto_switch_eco(cap, status, get_power_profile())
 
     classes = [profile]
     if profile in ("power-saver", "low-power"):
