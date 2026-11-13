@@ -29,21 +29,18 @@ PROFILES = [
         "id": "power-saver",
         "icon": "󰌪",
         "name": "Eco (Power Saver)",
-        "desc": "60 Hz • Lower power draw & cooler operation",
         "color": "#ff9f43",
     },
     {
         "id": "balanced",
         "icon": "󰾅",
         "name": "Balanced",
-        "desc": "144 Hz • Adaptive performance & battery efficiency",
         "color": "#55e6a5",
     },
     {
         "id": "performance",
         "icon": "󰓅",
         "name": "Performance",
-        "desc": "144 Hz • Maximum CPU boost & thermal headroom",
         "color": "#ff5c5c",
     },
 ]
@@ -230,11 +227,6 @@ switch:disabled slider {
     font-size: 13px;
     font-weight: 700;
     color: #e2e8f0;
-}
-
-.profile-desc {
-    font-size: 10.5px;
-    color: #8492a6;
 }
 
 .profile-eta {
@@ -485,21 +477,17 @@ class PowerControlCenter(Gtk.Window):
             btn.get_style_context().add_class("profile-btn")
             btn.connect("clicked", lambda _w, pid=prof["id"]: self.on_profile_clicked(pid))
 
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             icon_lbl = Gtk.Label(label=prof["icon"])
             icon_lbl.get_style_context().add_class("profile-icon")
             icon_lbl.set_valign(Gtk.Align.CENTER)
             row.pack_start(icon_lbl, False, False, 0)
 
-            text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             name_lbl = Gtk.Label(label=prof["name"], xalign=0)
             name_lbl.get_style_context().add_class("profile-name")
-            desc_lbl = Gtk.Label(label=prof["desc"], xalign=0)
-            desc_lbl.get_style_context().add_class("profile-desc")
-            text_box.pack_start(name_lbl, False, False, 0)
-            text_box.pack_start(desc_lbl, False, False, 0)
-            row.pack_start(text_box, True, True, 0)
+            name_lbl.set_valign(Gtk.Align.CENTER)
+            row.pack_start(name_lbl, True, True, 0)
 
             right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             right_box.set_valign(Gtk.Align.CENTER)
@@ -513,7 +501,7 @@ class PowerControlCenter(Gtk.Window):
 
             btn.add(row)
             profiles_box.pack_start(btn, False, False, 0)
-            self.profile_widgets[prof["id"]] = (btn, desc_lbl, eta_lbl, meta_lbl, prof["desc"])
+            self.profile_widgets[prof["id"]] = (btn, eta_lbl, meta_lbl)
 
         self.lbl_footer = Gtk.Label(label="", xalign=0)
         self.lbl_footer.get_style_context().add_class("footer-stats")
@@ -611,17 +599,17 @@ class PowerControlCenter(Gtk.Window):
             header_ctx.add_class(profile_id)
 
         perf_allowed = battery_helper.is_performance_allowed(self.current_cap)
-        for pid, (btn, desc_lbl, _eta_lbl, _meta_lbl, default_desc) in self.profile_widgets.items():
+        for pid, (btn, _eta_lbl, _meta_lbl) in self.profile_widgets.items():
             ctx = btn.get_style_context()
             active_cls = f"active-{pid}"
             if pid == "performance" and not perf_allowed:
                 btn.set_sensitive(False)
-                desc_lbl.set_label(f"Unavailable below {battery_helper.PERFORMANCE_MIN_CHARGE}% battery")
+                btn.set_tooltip_text(f"Unavailable below {battery_helper.PERFORMANCE_MIN_CHARGE}% battery")
                 ctx.remove_class(active_cls)
                 continue
 
             btn.set_sensitive(True)
-            desc_lbl.set_label(default_desc)
+            btn.set_tooltip_text(None)
             if pid == profile_id:
                 ctx.add_class(active_cls)
             else:
@@ -638,7 +626,7 @@ class PowerControlCenter(Gtk.Window):
             self.current_energy_wh,
         )
         perf_allowed = battery_helper.is_performance_allowed(self.current_cap)
-        for pid, (_btn, _desc_lbl, eta_lbl, meta_lbl, _default_desc) in self.profile_widgets.items():
+        for pid, (_btn, eta_lbl, meta_lbl) in self.profile_widgets.items():
             if pid == "performance" and not perf_allowed:
                 eta_lbl.set_label("--")
                 meta_lbl.set_label(f"LOCKED <{battery_helper.PERFORMANCE_MIN_CHARGE}%")
