@@ -118,6 +118,35 @@ window#waybar {
     border-color: #ff5c5c;
 }
 
+@keyframes blink-critical {
+    0% {
+        background-color: #ff5c5c;
+        color: #0a0a0e;
+        border-color: #ff5c5c;
+    }
+    50% {
+        background-color: rgba(10, 10, 14, 0.92);
+        color: #ff5c5c;
+        border-color: #ff5c5c;
+    }
+    100% {
+        background-color: #ff5c5c;
+        color: #0a0a0e;
+        border-color: #ff5c5c;
+    }
+}
+
+#battery.critical,
+#custom-battery.critical {
+    background-color: #ff5c5c;
+    color: #0a0a0e;
+    border-color: #ff5c5c;
+    animation-name: blink-critical;
+    animation-duration: 1s;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+
 #cpu {
     color: #b56cff;
 }
@@ -313,6 +342,13 @@ window#waybar {
 
 #battery.performance:hover,
 #custom-battery.performance:hover {
+    background: #ff7878;
+    border-color: #ff7878;
+    color: #0a0a0e;
+}
+
+#battery.critical:hover,
+#custom-battery.critical:hover {
     background: #ff7878;
     border-color: #ff7878;
     color: #0a0a0e;

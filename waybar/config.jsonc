@@ -97,7 +97,7 @@
     "format": "󰅌",
     "on-click": "~/.config/waybar/clipboard-menu.sh",
     "tooltip": true,
-    "tooltip-format": "Clipboard History\nClick: search & paste (Super+H)"
+    "tooltip-format": "Clipboard History\nClick: search &amp; paste (Super+H)"
   },
 
   "backlight": {

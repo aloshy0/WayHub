@@ -12,6 +12,7 @@ STATE_DIR = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"
 AUTO_ECO_THRESHOLD = 30
 PERFORMANCE_MIN_CHARGE = 30
 REFRESH_LOCK_THRESHOLD = 30
+CRITICAL_BATTERY_THRESHOLD = 10
 AUTO_ECO_STATE_FILE = os.path.join(STATE_DIR, "waybar-auto-eco.json")
 POWER_ESTIMATE_STATE_FILE = os.path.join(STATE_DIR, "waybar-power-estimates.json")
 SYNC_LOCK_PATH = f"/tmp/waybar_power_sync_{os.getuid()}.lock"
@@ -596,6 +597,8 @@ def get_battery_info():
         classes.append("power-saver")
     if status.lower() == "charging":
         classes.append("charging")
+    if cap is not None and cap < CRITICAL_BATTERY_THRESHOLD:
+        classes.append("critical")
 
     profile_display = "Eco (Power Saver)" if profile in ("power-saver", "low-power") else profile.capitalize()
     if refresh_hz:
