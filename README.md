@@ -4,7 +4,7 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 
 ![GitHub License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/6f6806d4-0113-46c4-ac58-3bc407984482" />
+![Waybar Desktop Overview](assets/screenshots/overview.jpg)
 
 
 ## Features
@@ -27,16 +27,42 @@ A polished, open-source status bar customization suite for Arch Linux and Hyprla
 - **Available Devices Scanner**: Discovers nearby Bluetooth devices in range with a flat `󰑐` rescan button and one-click pairing.
 - **Power Switch & Single-Instance Toggle**: Toggle Bluetooth radio power and toggle the popup open/closed smoothly from Waybar.
 
-### 󱈑 Battery & Power Profiles (`battery.py` & `power-profile-toggle.sh`)
+### 󱈑 Battery & Power Profiles (`battery.py`, `power-menu.py`, & `power-menu.sh`)
 - **Dynamic Battery State**: Accurately tracks charge percentage, charging status, and battery health via UPower/sysfs.
-- **Power Profile Switching**: Left-click the battery pill to seamlessly cycle through power profiles (`performance` 󰓅, `balanced` 󰾅, `power-saver` / `eco` 󰌪).
+- **Power Profile Selector Popup**: GTK3 and Layer Shell popup with live telemetry (live wattage draw, battery runtimes, and display refresh rate synchronization).
+- **Power Profile Switching**: Seamlessly toggle between `Performance` (󰓅, 144 Hz), `Balanced` (󰾅, 144 Hz), and `Eco / Power Saver` (󰌪, 60 Hz).
 - **Eco Mode Highlighting**: Automatically changes pill colors to emerald green during Power Saver mode for clear visual feedback.
+
+### 󰅌 Clipboard History (`clipboard-menu.py` & `clipboard-menu.sh`)
+- **Modern GTK3 & Layer Shell Popup**: Invoked with `Super+H` or Waybar integration.
+- **Rich Entry Support**: Handles both text snippets and image clipboard entries with thumbnails.
+- **24-Hour Auto-Expiry**: Automatically prunes clipboard items older than 24 hours.
+- **Instant Search & Filters**: Filter by All, Text, or Images with instant search and inline Clear All confirmation.
 
 ###  Flexible Display Modes & Proper Autohide
 - **Fixed Mode**: The bar is docked to the top (`exclusive: true`), reserving space for tiled windows.
 - **Autohide Mode**: Uses a sub-millisecond Hyprland socket daemon (`autohide-daemon.py`) to reveal the bar when hovering the top edge (`y <= 2px`) and hide when cursor leaves.
 - **Clean Click-Through**: Unmaps layer input when hidden, completely eliminating invisible ghost clicks over browser tabs, editor headers, and window buttons.
 - **Multi-Monitor Support**: Works seamlessly across all outputs, scaling factors, and multi-monitor setups.
+
+---
+
+## Screenshots
+
+### Desktop Overview
+![Waybar Desktop Overview](assets/screenshots/overview.jpg)
+
+### Wi-Fi Control Center
+![Wi-Fi Control Center](assets/screenshots/wifi.jpg)
+
+### Bluetooth Control Center
+![Bluetooth Control Center](assets/screenshots/bluetooth.jpg)
+
+### Power & Battery Profile Selector
+![Power & Battery Profiles](assets/screenshots/power.jpg)
+
+### Clipboard History (`Super+H`)
+![Clipboard History](assets/screenshots/clipboard.jpg)
 
 ---
 
@@ -214,20 +240,8 @@ sudo systemctl enable --now NetworkManager
 
 ## License
 
-This project is licensed under the [MIT License](file:///home/michael/Projects/waybar/LICENSE).
+This project is licensed under the [MIT License](LICENSE).
 Waybar and Wofi are third-party projects and are subject to their own upstream licensing.
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c31f263a-8f6f-40a2-9817-4a8e73d953af" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/491be5e7-c369-4768-97a3-6ba84e07ac64" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/18b553dd-391b-415d-8d82-2c0f2e7484ca" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/69837d82-2931-4afa-bb09-e208227b9e4e" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/4978039b-1449-4684-a32f-e273d5cd70fa" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/bffe9a57-a082-4f27-a464-aa5f6e01d4c0" />
 
 
 
